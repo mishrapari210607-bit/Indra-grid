@@ -5,7 +5,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import sys, os
-from logic.simulator import EnergySimulator
+from data.simulator import EnergySimulator
 from logic.optimizer import EnergyOptimizer, EnergyState
 
 # ─── Import Optimizer ───────────────────────────────
