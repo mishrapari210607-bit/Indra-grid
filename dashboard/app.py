@@ -1,8 +1,12 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import sys, os
 from logic.simulator import EnergySimulator
+from logic.optimizer import EnergyOptimizer, EnergyState
 
 # ─── Import Optimizer ───────────────────────────────
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
