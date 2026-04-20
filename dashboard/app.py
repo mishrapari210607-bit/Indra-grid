@@ -30,7 +30,7 @@ with st.sidebar:
     st.caption("Activates battery-only operation with solar priority.")
 
 # ─── Load data ─────────────────────────────────────────────────────────────
-df = pd.read_csv("scenario.csv")
+df = pd.read_csv("data/scenarios.csv")
 df["demand"] = df["demand"] * demand_multiplier
 df["gap"]    = df["demand"] - df["solar"]
 
