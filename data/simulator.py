@@ -1,41 +1,47 @@
-# data/simulator.py
+import pandas as pd
+import numpy as np
 
-import csv
-import random
+class EnergySimulator:
 
-def generate_data(filename="data/scenarios.csv"):
+    def __init__(self, hours=24):
+        self.hours = hours
 
-    with open(filename, "w", newline="") as f:
-        writer = csv.writer(f)
+    def generate(self):
+        data = []
 
-        # HEADER (DO NOT CHANGE)
-        writer.writerow(["time", "solar", "demand", "grid_price", "grid_available"])
+        for t in range(self.hours):
 
-        for i in range(24):
+            # ─── Solar Pattern (bell curve) ───────────
+            solar = max(0, 50 * np.sin((t - 6) * np.pi / 12))
 
-            # ☀️ Solar pattern (peak at noon)
-            solar = max(0, int(100 * (1 - abs(i - 12) / 12)) + random.randint(-5, 5))
-
-            # 🏭 Demand pattern
-            if 8 <= i <= 18:
-                demand = random.randint(80, 140)   # working hours
+            # ─── Demand Pattern ──────────────────────
+            if 6 <= t <= 9:          # morning peak
+                demand = np.random.uniform(40, 60)
+            elif 18 <= t <= 22:     # evening peak
+                demand = np.random.uniform(50, 70)
             else:
-                demand = random.randint(30, 60)    # low usage
+                demand = np.random.uniform(20, 40)
 
-            # 💰 Grid pricing (peak hours expensive)
-            if 18 <= i <= 21:
-                grid_price = random.randint(20, 30)   # peak
+            # ─── Grid Price ──────────────────────────
+            if 18 <= t <= 22:
+                grid_price = np.random.uniform(10, 15)
             else:
-                grid_price = random.randint(5, 12)    # normal
+                grid_price = np.random.uniform(5, 9)
 
-            # 🔌 Power cut simulation (7–9 PM)
-            grid_available = 0 if i in [19, 20] else 1
+            data.append({
+                "hour": t,
+                "solar": round(solar, 2),
+                "demand": round(demand, 2),
+                "grid_price": round(grid_price, 2)
+            })
 
-            writer.writerow([i, solar, demand, grid_price, grid_available])
+        df = pd.DataFrame(data)
+        return df
 
-    print("✅ scenarios.csv created successfully!")
 
-
-# Run file directly
+# ─── Save to CSV ─────────────────────────────────────
 if __name__ == "__main__":
-    generate_data()
+    sim = EnergySimulator(hours=48)
+    df = sim.generate()
+    df.to_csv("../data/scenarios.csv", index=False)
+    print("✅ scenarios.csv generated!")
