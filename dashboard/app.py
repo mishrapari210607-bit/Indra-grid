@@ -149,3 +149,23 @@ with st.expander("View raw scenario data"):
                .background_gradient(subset=["gap"], cmap="RdYlGn_r"),
         use_container_width=True
     )
+# ─── SideBar ──────────────────────────────────────────────
+time_step = st.slider("⏱️ Select Hour (Simulation)", 0, len(df)-1, 0)
+current = df.iloc[time_step]
+st.subheader(f"⚡ Live Simulation — Hour {time_step}")
+
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric("Solar", f"{current['solar']:.1f} kW")
+col2.metric("Demand", f"{current['demand']:.1f} kW")
+col3.metric("Grid Used", f"{current['grid']:.1f} kW")
+col4.metric("Battery Used", f"{current['battery_draw']:.1f} kW")
+
+if island_mode:
+    st.success("🧠 Decision: Grid OFF → Running on Battery + Solar (Island Mode)")
+elif current["grid"] > 0:
+    st.warning("🧠 Decision: Grid used due to energy deficit")
+elif current["solar"] > current["demand"]:
+    st.success("🧠 Decision: Solar surplus → Charging battery")
+else:
+    st.info("🧠 Decision: Balanced usage")
