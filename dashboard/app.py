@@ -171,7 +171,25 @@ with col2:
 # ─── Live Simulation ───────────────────────────────
 st.subheader("⚡ Live Simulation")
 
-time_step = st.slider("Select Hour", 0, len(df)-1, 0)
+time_step = st.slider("⏱️ Simulate Factory Time", 0, len(df)-1, 0)
+
+# Convert index to real time (AM/PM)
+hour = time_step % 24
+
+if hour == 0:
+    display_time = "12 AM"
+elif hour < 12:
+    display_time = f"{hour} AM"
+elif hour == 12:
+    display_time = "12 PM"
+else:
+    display_time = f"{hour-12} PM"
+
+day = time_step // 24 + 1
+
+# Show clean time
+st.subheader(f"🕒 Day {day}, {display_time}")
+
 current = df.iloc[time_step]
 
 c1, c2, c3, c4 = st.columns(4)
