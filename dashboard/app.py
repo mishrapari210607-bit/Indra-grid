@@ -4,7 +4,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import sys, os
 from data.simulator import EnergySimulator
 from logic.optimizer import EnergyOptimizer, EnergyState
 
@@ -103,6 +102,8 @@ for i, row in df.iterrows():
 df = pd.DataFrame(results)
 df["gap"] = df["demand"] - df["solar"]
 
+
+
 # ─── KPI Metrics ───────────────────────────────────
 solar_pct = round((df["solar_used"].sum() / df["demand"].sum()) * 100)
 grid_draw = round(df["grid"].sum(), 1)
@@ -110,12 +111,16 @@ money_saved = round(grid_draw * 8.5)
 co2_offset = round(df["solar_used"].sum() * 0.82, 1)
 
 c1, c2, c3, c4 = st.columns(4)
+
 c1.metric("🌱 Green Score", f"{solar_pct}%")
 c2.metric("💰 Money Saved", f"₹{money_saved:,}")
 c3.metric("🌍 CO₂ Offset", f"{co2_offset} kg")
-c4.metric("🔋 Battery Left", f"{current['battery_level']:.1f} kWh")
 
+# ✅ FIX: use latest battery value instead of 'current'
+final_battery = df["battery_level"].iloc[-1]
+c4.metric("🔋 Battery Left", f"{final_battery:.1f} kWh")
 st.divider()
+st.caption("🔋 Final battery after full simulation")
 
 # ─── Charts ────────────────────────────────────────
 col1, col2 = st.columns([2,1])
@@ -189,8 +194,8 @@ day = time_step // 24 + 1
 
 # Show clean time
 st.subheader(f"🕒 Day {day}, {display_time}")
-
 current = df.iloc[time_step]
+
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Solar", f"{current['solar']:.1f}")
