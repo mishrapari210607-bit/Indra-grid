@@ -113,7 +113,7 @@ c1, c2, c3, c4 = st.columns(4)
 c1.metric("🌱 Green Score", f"{solar_pct}%")
 c2.metric("💰 Money Saved", f"₹{money_saved:,}")
 c3.metric("🌍 CO₂ Offset", f"{co2_offset} kg")
-c4.metric("🔋 Battery Left", f"{battery_level:.1f} kWh")
+c4.metric("🔋 Battery Left", f"{current['battery_level']:.1f} kWh")
 
 st.divider()
 
