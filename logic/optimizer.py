@@ -48,29 +48,28 @@ class EnergyOptimizer:
             usage.battery_charged = charge
             battery += charge
 
-        # ─── 3. Battery Decision ──────────────────────
-        # ─── 3. Battery Decision ──────────────────────
-use_battery = (
-    s.peak_hour or
-    not s.grid_available or
-    s.grid_price > 8
-)
+       
+                # ─── 3. Battery Decision ──────────────────────
+        use_battery = (
+            s.peak_hour or
+            not s.grid_available or
+            s.grid_price > 8
+        )
 
-if use_battery and remaining_demand > 0:
+        if use_battery and remaining_demand > 0:
 
-    reserve = 0.2 * s.battery_capacity   # 🔥 keep 20% safety
-    usable_battery = max(0, battery - reserve)
+            reserve = 0.2 * s.battery_capacity   # 🔥 keep 20% safety
+            usable_battery = max(0, battery - reserve)
 
-    usable_energy = usable_battery * DISCHARGE_EFF
+            usable_energy = usable_battery * DISCHARGE_EFF
 
-    used = min(remaining_demand, usable_energy)
-    usage.battery_used = used
+            used = min(remaining_demand, usable_energy)
+            usage.battery_used = used
 
-    battery -= used
-    remaining_demand -= used
+            battery -= used
+            remaining_demand -= used
 
-    usage.decision = "Battery used (with safety reserve)"
-
+            usage.decision = "Battery used (with safety reserve)"
         # ─── 4. Grid Fallback ─────────────────────────
         if remaining_demand > 0:
             if s.grid_available:
