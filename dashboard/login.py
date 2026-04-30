@@ -77,4 +77,8 @@ def app():
 if not st.session_state.token:
     login()
 else:
+<<<<<<< HEAD
     app()
+=======
+    app()
+>>>>>>> a41cf1d516322ae8c83922a21abf80027100364c
