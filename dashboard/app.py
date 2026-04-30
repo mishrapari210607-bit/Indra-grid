@@ -1,214 +1,81 @@
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import requests
 import streamlit as st
-import pandas as pd
-import plotly.graph_objects as go
-from data.simulator import EnergySimulator
-from logic.optimizer import EnergyOptimizer, EnergyState
 
-# ─── Import Optimizer ───────────────────────────────
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from logic.optimizer import EnergyOptimizer, EnergyState
+import dashboard
 
-st.set_page_config(page_title="Indra-Grid", page_icon="⚡", layout="wide")
 
-# ─── Sidebar (FULL CONTROL PANEL) ───────────────────
-with st.sidebar:
-    st.header("⚙️ Scenario Control Panel")
+API = "http://127.0.0.1:8001"
 
-    st.subheader("🔋 Energy Settings")
-    demand_multiplier = st.slider("Demand Multiplier", 0.5, 2.0, 1.0, step=0.1)
-    battery_capacity  = st.slider("Battery Capacity (kWh)", 10, 100, 40)
-    battery_soc       = st.slider("Battery SoC (%)", 0, 100, 70)
-
-    st.divider()
-
-    st.subheader("⚡ Grid Controls")
-    grid_available = st.toggle("Grid Available", True)
-    island_mode = not grid_available
-    grid_price = st.slider("Electricity Price (₹/kWh)", 1, 15, 8)
-
-    st.divider()
-
-    st.subheader("🧠 AI Behavior")
-    peak_override = st.toggle("Force Peak Hour Mode", False)
-    st.caption("Forces battery usage even if grid is available.")
-
-    st.divider()
-
-    st.subheader("📊 Simulation")
-    speed = st.selectbox("Simulation Speed", ["Slow", "Normal", "Fast"])
-
-    st.markdown("### 🔍 System Status")
-    st.write(f"Battery: {battery_soc}%")
-    st.write(f"Grid: {'ON' if grid_available else 'OFF'}")
-    st.write(f"Price: ₹{grid_price}/kWh")
-
-# ─── Load Data ─────────────────────────────────────
-use_simulator = st.sidebar.toggle("Use Live Simulator", True)
-
-if use_simulator:
-    sim = EnergySimulator(hours=48)
-    df = sim.generate()
-else:
-    df = pd.read_csv("../data/scenarios.csv")
-df["demand"] = df["demand"] * demand_multiplier
-
-# ─── Header ────────────────────────────────────────
-st.title("⚡ Indra-Grid")
-st.caption("AI-driven energy optimizer · Smart Energy Dashboard")
-
-# ─── System Alerts ─────────────────────────────────
-if island_mode:
-    st.error("🔴 Island Mode Active — Running on Battery + Solar only")
-elif grid_price > 10:
-    st.warning("⚠️ High electricity price — AI minimizing grid usage")
-else:
-    st.success("✅ Grid operating normally")
-
-# ─── Run Optimizer ─────────────────────────────────
-optimizer = EnergyOptimizer()
-battery_level = battery_capacity * battery_soc / 100
-
-results = []
-
-for i, row in df.iterrows():
-
-    peak_hour = peak_override or (i % 24 >= 18 or i % 24 <= 6)
-
-    state = EnergyState(
-    solar=row["solar"],
-    demand=row["demand"],
-    battery_level=battery_level,
-    battery_capacity=battery_capacity,
-    grid_available=grid_available,
-    grid_price=row["grid_price"],  # ✅ dynamic now
-    peak_hour=peak_hour
+st.set_page_config(
+    page_title="Indra-Grid | Enterprise EMS",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
-    
-
-    usage, battery_level = optimizer.optimize(state)
-
-    results.append({
-        "solar": row["solar"],
-        "demand": row["demand"],
-        "solar_used": usage.solar_used,
-        "battery_used": usage.battery_used,
-        "grid": usage.grid_used,
-        "battery_level": battery_level
-    })
-
-df = pd.DataFrame(results)
-df["gap"] = df["demand"] - df["solar"]
 
 
+if "token" not in st.session_state:
+    st.session_state.token = None
+if "user" not in st.session_state:
+    st.session_state.user = None
+if "role" not in st.session_state:
+    st.session_state.role = "Operator"
 
-# ─── KPI Metrics ───────────────────────────────────
-solar_pct = round((df["solar_used"].sum() / df["demand"].sum()) * 100)
-grid_draw = round(df["grid"].sum(), 1)
-money_saved = round(grid_draw * 8.5)
-co2_offset = round(df["solar_used"].sum() * 0.82, 1)
 
-c1, c2, c3, c4 = st.columns(4)
-
-c1.metric("🌱 Green Score", f"{solar_pct}%")
-c2.metric("💰 Money Saved", f"₹{money_saved:,}")
-c3.metric("🌍 CO₂ Offset", f"{co2_offset} kg")
-
-# ✅ FIX: use latest battery value instead of 'current'
-final_battery = df["battery_level"].iloc[-1]
-c4.metric("🔋 Battery Left", f"{final_battery:.1f} kWh")
-st.divider()
-st.caption("🔋 Final battery after full simulation")
-
-# ─── Charts ────────────────────────────────────────
-col1, col2 = st.columns([2,1])
-
-with col1:
-    st.subheader("⚡ Energy Flow Over Time")
-    fig = go.Figure()
-
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df["solar_used"],
-        name="Solar", fill="tozeroy",
-        line=dict(color="#3B6D11")
-    ))
-
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df["demand"],
-        name="Demand",
-        line=dict(color="#D85A30", dash="dash")
-    ))
-
-    fig.add_trace(go.Bar(
-        x=df.index, y=df["grid"],
-        name="Grid",
-        marker_color="rgba(136,135,128,0.4)"
-    ))
-
-    fig.update_layout(
-        height=300,
-        margin=dict(l=0, r=0, t=10, b=0),
-        hovermode="x unified"
+def login():
+    st.markdown(
+        """
+        <div style="max-width:420px;margin:9vh auto 0;padding:28px;border:1px solid #E8DDD0;
+        border-radius:8px;background:#FFFFFF;font-family:Barlow,Arial,sans-serif;">
+            <div style="font-size:24px;font-weight:800;letter-spacing:2px;color:#C87000;
+            text-transform:uppercase;">Indra-Grid</div>
+            <div style="font-size:12px;color:#7A6A50;margin-top:4px;">Enterprise Energy Management Login</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    role = st.selectbox("Role for registration", ["Owner", "Operator", "Admin"])
+    col1, col2 = st.columns(2)
 
-with col2:
-    st.subheader("🔋 Energy Mix")
+    if col1.button("Login", use_container_width=True):
+        try:
+            res = requests.post(
+                f"{API}/login",
+                json={"username": username, "password": password},
+                timeout=4,
+            ).json()
+            if res.get("status") == "success":
+                st.session_state.token = res["token"]
+                st.session_state.user = username
+                st.session_state.role = res.get("role", "Operator")
+                st.rerun()
+            else:
+                st.error(res.get("message", "Login failed"))
+        except Exception:
+            st.error("Backend not running. Start it with: python -m uvicorn backend.api:app --port 8001 --reload")
 
-    total = df["solar_used"].sum() + df["battery_used"].sum() + df["grid"].sum()
+    if col2.button("Register", use_container_width=True):
+        try:
+            res = requests.post(
+                f"{API}/register",
+                json={"username": username, "password": password, "role": role},
+                timeout=4,
+            ).json()
+            if res.get("status") == "success":
+                st.success("User created. Now login.")
+            else:
+                st.error(res.get("message", "Registration failed"))
+        except Exception:
+            st.error("Backend not running.")
 
-    fig2 = go.Figure(go.Pie(
-        labels=["Solar", "Battery", "Grid"],
-        values=[
-            df["solar_used"].sum(),
-            df["battery_used"].sum(),
-            df["grid"].sum()
-        ],
-        hole=0.5
-    ))
 
-    fig2.update_layout(height=250)
-    st.plotly_chart(fig2, use_container_width=True)
+def app():
+    dashboard.run(st.session_state.user, st.session_state.role)
 
-# ─── Live Simulation ───────────────────────────────
-st.subheader("⚡ Live Simulation")
 
-time_step = st.slider("⏱️ Simulate Factory Time", 0, len(df)-1, 0)
-
-# Convert index to real time (AM/PM)
-hour = time_step % 24
-
-if hour == 0:
-    display_time = "12 AM"
-elif hour < 12:
-    display_time = f"{hour} AM"
-elif hour == 12:
-    display_time = "12 PM"
+if not st.session_state.token:
+    login()
 else:
-    display_time = f"{hour-12} PM"
-
-day = time_step // 24 + 1
-
-# Show clean time
-st.subheader(f"🕒 Day {day}, {display_time}")
-current = df.iloc[time_step]
-
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Solar", f"{current['solar']:.1f}")
-c2.metric("Demand", f"{current['demand']:.1f}")
-c3.metric("Grid", f"{current['grid']:.1f}")
-c4.metric("Battery", f"{current['battery_level']:.1f}")
-
-# ─── AI Decision ───────────────────────────────────
-if island_mode:
-    st.success("🧠 AI: Grid OFF → Running on Battery + Solar")
-elif current["grid"] > 0:
-    st.warning("🧠 AI: Grid used due to high demand")
-elif current["battery_used"] > 0:
-    st.info("🧠 AI: Battery supplying energy")
-else:
-    st.success("🧠 AI: Solar sufficient")
+    app()
