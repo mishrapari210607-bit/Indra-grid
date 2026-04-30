@@ -66,6 +66,9 @@ def init_state():
         "grid_available": True,
         "battery_soc": 76,
         "seed": 42,
+        "scenario_mode": "Normal",
+        "weather_lat": 26.4499,
+        "weather_lon": 80.3319,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -87,6 +90,7 @@ def entity_config(etype):
             "pr": 84.1,
             "transformers": 3,
             "feeders": 8,
+            "capex_rs": 640_000_000,
         },
         "Commercial Building": {
             "scale": 12,
@@ -102,6 +106,7 @@ def entity_config(etype):
             "pr": 81.5,
             "transformers": 1,
             "feeders": 4,
+            "capex_rs": 32_000_000,
         },
         "Data Centre": {
             "scale": 65,
@@ -117,6 +122,7 @@ def entity_config(etype):
             "pr": 76.2,
             "transformers": 4,
             "feeders": 12,
+            "capex_rs": 155_000_000,
         },
         "Residential Campus": {
             "scale": 1,
@@ -132,6 +138,7 @@ def entity_config(etype):
             "pr": 83.4,
             "transformers": 1,
             "feeders": 2,
+            "capex_rs": 3_000_000,
         },
     }
     return configs[etype]
@@ -158,10 +165,19 @@ def sidebar(username, role, cfg):
         )
 
         st.markdown('<div class="slabel">Optimizer Controls</div>', unsafe_allow_html=True)
+        st.selectbox(
+            "Demo Scenario",
+            ["Normal", "Peak Tariff Event", "Grid Outage Drill", "Monsoon Solar Dip"],
+            key="scenario_mode",
+        )
         st.slider("Demand Multiplier", 0.5, 2.0, key="demand_multiplier", step=0.05)
         st.slider("Initial Battery SOC", 0, 100, key="battery_soc")
         st.toggle("Grid Available", key="grid_available")
         st.number_input("Simulation Seed", min_value=1, max_value=999, key="seed")
+
+        st.markdown('<div class="slabel">Weather Forecast API</div>', unsafe_allow_html=True)
+        st.number_input("Latitude", key="weather_lat", format="%.4f")
+        st.number_input("Longitude", key="weather_lon", format="%.4f")
 
         st.markdown('<div class="slabel">Display</div>', unsafe_allow_html=True)
         st.toggle("Dark Mode", key="dark_mode")
@@ -186,6 +202,9 @@ def sidebar(username, role, cfg):
         "grid_available": st.session_state.grid_available,
         "battery_soc": st.session_state.battery_soc,
         "seed": st.session_state.seed,
+        "scenario_mode": st.session_state.scenario_mode,
+        "weather_lat": st.session_state.weather_lat,
+        "weather_lon": st.session_state.weather_lon,
     }
 
 
@@ -196,6 +215,8 @@ def optimized_frame(cfg, controls, hours=None):
 
     raw["solar"] = raw["solar"] * cfg["scale"]
     raw["demand"] = raw["demand"] * cfg["scale"] * controls["demand_multiplier"]
+    raw["grid_available"] = bool(controls["grid_available"])
+    raw = apply_demo_scenario(raw, controls.get("scenario_mode", "Normal"))
 
     optimizer = EnergyOptimizer()
     battery = cfg["battery_capacity"] * controls["battery_soc"] / 100
@@ -208,7 +229,7 @@ def optimized_frame(cfg, controls, hours=None):
             demand=float(row["demand"]),
             battery_level=battery,
             battery_capacity=cfg["battery_capacity"],
-            grid_available=controls["grid_available"],
+            grid_available=bool(row["grid_available"]),
             grid_price=float(row["grid_price"]),
             peak_hour=6 <= hour <= 9 or 18 <= hour <= 22,
         )
@@ -234,6 +255,25 @@ def optimized_frame(cfg, controls, hours=None):
     return pd.DataFrame(rows)
 
 
+def apply_demo_scenario(raw, scenario_mode):
+    raw = raw.copy()
+    evening = raw["hour"].between(18, 22)
+
+    if scenario_mode == "Peak Tariff Event":
+        raw.loc[evening, "grid_price"] *= 1.75
+        raw.loc[evening, "demand"] *= 1.15
+    elif scenario_mode == "Grid Outage Drill":
+        outage = raw["hour"].between(19, 21)
+        raw.loc[outage, "grid_available"] = False
+        raw.loc[outage, "demand"] *= 1.10
+    elif scenario_mode == "Monsoon Solar Dip":
+        daylight = raw["hour"].between(8, 17)
+        raw.loc[daylight, "solar"] *= 0.55
+        raw.loc[daylight, "grid_price"] *= 1.12
+
+    return raw
+
+
 def summarize(df, cfg):
     solar = df["solar_used"].sum()
     demand = df["demand"].sum()
@@ -241,6 +281,11 @@ def summarize(df, cfg):
     battery = df["battery_used"].sum() + df["battery_charged"].sum()
     unmet = df["unmet_demand"].sum()
     export = np.maximum(df["solar"] - df["solar_used"] - df["battery_charged"] / 0.9, 0).sum()
+    battery_arbitrage = df["battery_used"].sum() * cfg["tariff"] * 0.15
+    annual_factor = 8760 / max(len(df), 1)
+    annual_savings = (solar * cfg["tariff"] + battery_arbitrage) * annual_factor
+    payback_years = cfg["capex_rs"] / annual_savings if annual_savings > 0 else 0
+    roi_pct = annual_savings / cfg["capex_rs"] * 100 if cfg["capex_rs"] > 0 else 0
     return {
         "solar": solar,
         "demand": demand,
@@ -253,6 +298,10 @@ def summarize(df, cfg):
         "cost": grid * cfg["tariff"],
         "savings": solar * cfg["tariff"],
         "soc": 0 if cfg["battery_capacity"] == 0 else df["battery_level"].iloc[-1] / cfg["battery_capacity"] * 100,
+        "battery_arbitrage": battery_arbitrage,
+        "annual_savings": annual_savings,
+        "payback_years": payback_years,
+        "roi_pct": roi_pct,
     }
 
 
@@ -280,9 +329,81 @@ def recommendations(df, cfg, summary):
         recs.append(("Green", "Self-sufficiency is strong. Keep battery reserve active and export excess solar only after storage is full."))
     if latest["grid_price"] > 8 and latest["grid_used"] > 0:
         recs.append(("Tariff", "Current grid price is high while grid is being used. Increase battery SOC before this hour in future runs."))
+    if summary["payback_years"] and summary["payback_years"] <= 6:
+        recs.append(("ROI", f"Projected payback is {summary['payback_years']:.1f} years at current dispatch savings."))
     if not recs:
         recs.append(("Stable", "Solar, battery, and grid dispatch are balanced for this scenario."))
     return recs
+
+
+def auth_headers():
+    token = st.session_state.get("token")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def fetch_weather_forecast(lat, lon):
+    try:
+        res = requests.get(
+            f"{API}/weather/forecast",
+            params={"latitude": lat, "longitude": lon},
+            timeout=6,
+        )
+        return res.json()
+    except Exception:
+        return {"status": "offline", "source": "dashboard-fallback", "hours": []}
+
+
+def weather_adjusted_frame(cfg, controls, weather):
+    df = optimized_frame(cfg, controls, hours=24)
+    hours = weather.get("hours", [])
+    if not hours:
+        return df
+
+    cloud = pd.Series([float(item.get("cloud_cover_pct", 50)) for item in hours[: len(df)]])
+    rain = pd.Series([float(item.get("precipitation_probability_pct", 0)) for item in hours[: len(df)]])
+    solar_factor = (1 - cloud.reindex(df.index, fill_value=50) / 100 * 0.55).clip(lower=0.35, upper=1.0)
+    demand_factor = (1 + rain.reindex(df.index, fill_value=0) / 100 * 0.08).clip(lower=1.0, upper=1.12)
+
+    adjusted_controls = dict(controls)
+    raw = EnergySimulator(hours=24, seed=int(controls["seed"]) + 1).generate()
+    raw["solar"] = raw["solar"] * cfg["scale"] * solar_factor.to_numpy()
+    raw["demand"] = raw["demand"] * cfg["scale"] * controls["demand_multiplier"] * demand_factor.to_numpy()
+    raw["grid_available"] = bool(controls["grid_available"])
+    raw = apply_demo_scenario(raw, adjusted_controls.get("scenario_mode", "Normal"))
+
+    optimizer = EnergyOptimizer()
+    battery = cfg["battery_capacity"] * controls["battery_soc"] / 100
+    rows = []
+    for _, row in raw.iterrows():
+        hour = int(row["hour"])
+        state = EnergyState(
+            solar=float(row["solar"]),
+            demand=float(row["demand"]),
+            battery_level=battery,
+            battery_capacity=cfg["battery_capacity"],
+            grid_available=bool(row["grid_available"]),
+            grid_price=float(row["grid_price"]),
+            peak_hour=6 <= hour <= 9 or 18 <= hour <= 22,
+        )
+        usage, battery = optimizer.optimize(state)
+        rows.append(
+            {
+                "step": int(row["step"]),
+                "hour": hour,
+                "time": row["time"],
+                "solar": state.solar,
+                "demand": state.demand,
+                "grid_price": state.grid_price,
+                "solar_used": usage.solar_used,
+                "battery_used": usage.battery_used,
+                "grid_used": usage.grid_used,
+                "battery_charged": usage.battery_charged,
+                "unmet_demand": usage.unmet_demand,
+                "battery_level": battery,
+                "decision": usage.decision,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def inject_css():
@@ -620,7 +741,7 @@ def report_actions(df, cfg, summary, username, entity_type):
             "notes": recommendations(df, cfg, summary)[0][1],
         }
         try:
-            res = requests.post(f"{API}/runs", json=payload, timeout=4).json()
+            res = requests.post(f"{API}/runs", json=payload, headers=auth_headers(), timeout=4).json()
             if res.get("status") == "success":
                 st.success(f"Saved run #{res['id']}")
             else:
@@ -644,6 +765,10 @@ def build_text_report(summary, cfg, entity_type):
         f"Self-Sufficiency: {summary['self_suff']:.1f}%\n"
         f"Grid Cost: Rs {summary['cost']:,.0f}\n"
         f"Solar Savings: Rs {summary['savings']:,.0f}\n"
+        f"Battery Arbitrage: Rs {summary['battery_arbitrage']:,.0f}\n"
+        f"Annualized Savings: Rs {summary['annual_savings']:,.0f}\n"
+        f"Simple Payback: {summary['payback_years']:.1f} years\n"
+        f"Annual ROI: {summary['roi_pct']:.1f}%\n"
         f"CO2 Avoided: {summary['co2'] / 1000:.2f} t\n"
         f"Carbon Credit Estimate: Rs {credits:,.0f}\n"
         f"Tariff: Rs {cfg['tariff']:.2f}/kWh\n"
@@ -692,6 +817,7 @@ def performance_panel(summary, cfg):
         ("Battery State of Charge", summary["soc"]),
         ("Grid Dependency", grid_dep),
         ("Solar Capacity Utilisation", min(100, summary["solar"] / max(cfg["capacity_kw"] * 24, 1) * 100)),
+        ("Annual ROI", min(100, summary["roi_pct"])),
     ]
     rows = ""
     for label, value in items:
@@ -756,7 +882,9 @@ def energy_flow_view(df, cfg, summary):
             ("Grid Import Cost", f"Rs {summary['cost']:,.0f}"),
             ("Solar Savings", f"Rs {summary['savings']:,.0f}"),
             ("Export Estimate", f"{summary['export']:.1f} kWh"),
-            ("Battery Arbitrage", f"Rs {df['battery_used'].sum() * cfg['tariff'] * 0.15:,.0f}"),
+            ("Battery Arbitrage", f"Rs {summary['battery_arbitrage']:,.0f}"),
+            ("Annualized Savings", f"Rs {summary['annual_savings']:,.0f}"),
+            ("Simple Payback", f"{summary['payback_years']:.1f} years"),
         ])
     with col2:
         rows_panel("Energy Source Mix", [
@@ -780,6 +908,24 @@ def active_faults(cfg):
 
 
 def fault_data(cfg):
+    try:
+        res = requests.get(f"{API}/faults", headers=auth_headers(), timeout=4)
+        if res.status_code == 200:
+            rows = res.json()
+            if rows:
+                return [
+                    (
+                        item["title"],
+                        item["location"],
+                        item["created_at"][:16].replace("T", " "),
+                        item["status"],
+                        item["priority"],
+                    )
+                    for item in rows
+                ]
+    except Exception:
+        pass
+
     return [
         ("Battery Cell Over-Temp", cfg["battery_label"], "30 Apr 2026 14:10 IST", "active", "P1"),
         ("Grid Communication Loss", cfg["grid_label"], "30 Apr 2026 13:48 IST", "active", "P2"),
@@ -873,11 +1019,12 @@ def make_monthly(df, cfg):
 
 def forecast_view(cfg, controls):
     st.markdown('<div class="page-pad"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="slabel">Tomorrow Forecast</div>', unsafe_allow_html=True)
+    st.markdown('<div class="slabel">Weather-Aware Forecast</div>', unsafe_allow_html=True)
 
     forecast_controls = dict(controls)
     forecast_controls["seed"] = int(controls["seed"]) + 1
-    df = optimized_frame(cfg, forecast_controls, hours=24)
+    weather = fetch_weather_forecast(controls["weather_lat"], controls["weather_lon"])
+    df = weather_adjusted_frame(cfg, forecast_controls, weather)
 
     summary = summarize(df, cfg)
     kpis = "".join(
@@ -891,10 +1038,30 @@ def forecast_view(cfg, controls):
     )
     st.markdown(f'<div class="kpi-grid">{kpis}</div>', unsafe_allow_html=True)
 
+    weather_panel(weather)
+
     fig = dispatch_chart(df)
-    st.markdown('<div class="panel-head solo-head"><span class="panel-title">Tomorrow Dispatch Forecast</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="panel-head solo-head"><span class="panel-title">Weather-Adjusted Dispatch Forecast</span></div>', unsafe_allow_html=True)
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     recommendation_panel(df, cfg, summary)
+
+
+def weather_panel(weather):
+    hours = weather.get("hours", [])
+    if not hours:
+        rows_panel("Weather API", [("Status", weather.get("status", "offline")), ("Source", weather.get("source", "unknown"))])
+        return
+
+    cloud = np.mean([float(item.get("cloud_cover_pct", 0)) for item in hours])
+    rain = max(float(item.get("precipitation_probability_pct", 0)) for item in hours)
+    temp = np.mean([float(item.get("temperature_c", 0)) for item in hours])
+    rows_panel("Weather API", [
+        ("Status", weather.get("status", "unknown")),
+        ("Source", weather.get("source", "unknown")),
+        ("Average Temperature", f"{temp:.1f} C"),
+        ("Average Cloud Cover", f"{cloud:.0f}%"),
+        ("Peak Rain Probability", f"{rain:.0f}%"),
+    ])
 
 
 def admin_view(role):
@@ -907,7 +1074,10 @@ def admin_view(role):
     col1, col2 = st.columns(2)
     with col1:
         try:
-            users = requests.get(f"{API}/users", timeout=4).json()
+            users = requests.get(f"{API}/users", headers=auth_headers(), timeout=4).json()
+            if not isinstance(users, list):
+                st.error(users.get("detail", "Could not load users."))
+                users = []
             rows = "".join(
                 f'<div class="drow"><span class="drow-label">{u["username"]}</span><span class="tag tag-on">{u["role"]}</span></div>'
                 for u in users
@@ -918,7 +1088,10 @@ def admin_view(role):
 
     with col2:
         try:
-            runs = requests.get(f"{API}/runs?limit=12", timeout=4).json()
+            runs = requests.get(f"{API}/runs?limit=12", headers=auth_headers(), timeout=4).json()
+            if not isinstance(runs, list):
+                st.error(runs.get("detail", "Could not load saved runs."))
+                runs = []
             rows = "".join(
                 f'<div class="drow"><span class="drow-label">{r["entity_type"]}<br><span class="drow-val">{r["username"]} | {r["created_at"][:16]}</span></span><span class="drow-val">Rs {r["cost_rs"]:,.0f}</span></div>'
                 for r in runs
