@@ -21,6 +21,7 @@ Small and medium businesses often lose money through peak-hour tariffs, grid out
 - Demo scenario modes for peak-tariff events, grid-outage drills, and monsoon solar dips
 - Weather-aware forecast using the backend `/weather/forecast` API
 - ROI, payback, annualized savings, and battery arbitrage estimates
+- Judge Pitch view that explains the problem, optimizer, weather layer, business case, and demo flow in one place
 - Regression tests for core optimizer behavior
 
 ## Project Structure
@@ -77,7 +78,8 @@ set INDRA_GRID_SECRET_KEY=replace-with-a-long-random-secret
 5. Switch Demo Scenario to `Grid Outage Drill` or `Peak Tariff Event` to show resilience and peak shaving.
 6. Open Energy Flow for the Sankey diagram and ROI/payback metrics.
 7. Open Forecast to show weather-adjusted dispatch from the weather API.
-8. Save a simulation run and show it in the Admin view.
+8. Open Pitch to explain the full project story in under two minutes.
+9. Save a simulation run and show it in the Admin view.
 
 ## Key APIs
 

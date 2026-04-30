@@ -1,3 +1,4 @@
+import base64
 from pathlib import Path
 import sys
 from datetime import datetime
@@ -18,38 +19,51 @@ from logic.optimizer import EnergyOptimizer, EnergyState
 
 
 API = "http://127.0.0.1:8001"
+LOGO_PATH = Path(__file__).resolve().parent / "assets" / "indra_grid_logo.png"
+
+
+def brand_logo_data_uri():
+    if not LOGO_PATH.exists():
+        return ""
+    encoded = base64.b64encode(LOGO_PATH.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def brand_logo_html(class_name="brand-logo", size=48):
+    src = brand_logo_data_uri()
+    if not src:
+        return ""
+    return f'<img class="{class_name}" src="{src}" width="{size}" height="{size}" alt="Indra-Grid logo">'
 
 
 def run(username="Operator", role="Operator"):
     init_state()
+    if st.session_state.get("view") not in {"Live Simulator", "Energy Flow", "Account"}:
+        st.session_state.view = "Live Simulator"
+    if st.session_state.get("range_sel") not in {"Day", "Week", "Month"}:
+        st.session_state.range_sel = "Day"
+    st.session_state.dark_mode = True
 
     entity_type = st.session_state.entity_type
     cfg = entity_config(entity_type)
     controls = sidebar(username, role, cfg)
-    df = optimized_frame(cfg, controls)
-    summary = summarize(df, cfg)
+    with st.spinner("Running energy optimizer..."):
+        df = optimized_frame(cfg, controls)
+        summary = summarize(df, cfg)
 
     inject_css()
     topbar(entity_type, st.session_state.view)
 
     if summary["unmet"] > 0:
         alert(f"{summary['unmet']:.1f} kWh unmet demand in selected simulation window")
-    elif len(active_faults(cfg)) > 0 and st.session_state.view != "Fault Log":
-        alert(f"{len(active_faults(cfg))} active faults - review Fault Log")
+    elif len(active_faults(df, cfg, summary)) > 0:
+        alert(f"{len(active_faults(df, cfg, summary))} active operational events detected")
 
     view = st.session_state.view
-    if view == "Dashboard":
+    if view == "Live Simulator":
         dashboard_view(df, cfg, summary, username, entity_type)
     elif view == "Energy Flow":
         energy_flow_view(df, cfg, summary)
-    elif view == "Fault Log":
-        fault_log_view(cfg)
-    elif view == "Analytics":
-        analytics_view(df, cfg)
-    elif view == "Forecast":
-        forecast_view(cfg, controls)
-    elif view == "Admin":
-        admin_view(role)
     elif view == "Account":
         account_view(username, role, cfg, entity_type)
 
@@ -60,8 +74,8 @@ def init_state():
     defaults = {
         "range_sel": "Day",
         "entity_type": "Industrial Plant",
-        "view": "Dashboard",
-        "dark_mode": False,
+        "view": "Live Simulator",
+        "dark_mode": True,
         "demand_multiplier": 1.0,
         "grid_available": True,
         "battery_soc": 76,
@@ -146,7 +160,10 @@ def entity_config(etype):
 
 def sidebar(username, role, cfg):
     with st.sidebar:
-        st.markdown('<div class="side-brand">INDRA-GRID<div>Enterprise EMS</div></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="side-brand">{brand_logo_html("side-logo", 54)}<div class="side-brand-text">INDRA-GRID</div></div>',
+            unsafe_allow_html=True,
+        )
 
         st.markdown('<div class="slabel">Entity Type</div>', unsafe_allow_html=True)
         st.selectbox(
@@ -159,7 +176,7 @@ def sidebar(username, role, cfg):
         st.markdown('<div class="slabel">Navigation</div>', unsafe_allow_html=True)
         st.radio(
             "View",
-            ["Dashboard", "Energy Flow", "Fault Log", "Analytics", "Forecast", "Admin", "Account"],
+            ["Live Simulator", "Energy Flow", "Account"],
             key="view",
             label_visibility="collapsed",
         )
@@ -173,14 +190,18 @@ def sidebar(username, role, cfg):
         st.slider("Demand Multiplier", 0.5, 2.0, key="demand_multiplier", step=0.05)
         st.slider("Initial Battery SOC", 0, 100, key="battery_soc")
         st.toggle("Grid Available", key="grid_available")
-        st.number_input("Simulation Seed", min_value=1, max_value=999, key="seed")
 
-        st.markdown('<div class="slabel">Weather Forecast API</div>', unsafe_allow_html=True)
-        st.number_input("Latitude", key="weather_lat", format="%.4f")
-        st.number_input("Longitude", key="weather_lon", format="%.4f")
-
-        st.markdown('<div class="slabel">Display</div>', unsafe_allow_html=True)
-        st.toggle("Dark Mode", key="dark_mode")
+        st.markdown('<div class="slabel">Weather API</div>', unsafe_allow_html=True)
+        weather_df = get_solar_forecast(st.session_state.weather_lat, st.session_state.weather_lon)
+        if weather_df is not None and not weather_df.empty:
+            solar_days = summarize_solar_forecast(weather_df)
+            current = current_or_next_solar_hour(weather_df)
+            today = solar_days.iloc[0]
+            st.metric("Next Solar Irradiance", f"{current['Radiation (W/m2)']:.0f} W/m2")
+            st.metric("Today Peak", f"{today['Peak Radiation']:.0f} W/m2")
+            st.metric("Cloud Cover", f"{today['Avg Cloud']:.0f}%")
+        else:
+            st.caption("Weather update unavailable")
 
         if st.button("Logout", use_container_width=True):
             st.session_state.token = None
@@ -248,6 +269,7 @@ def optimized_frame(cfg, controls, hours=None):
                 "battery_charged": usage.battery_charged,
                 "unmet_demand": usage.unmet_demand,
                 "battery_level": battery,
+                "grid_available": state.grid_available,
                 "decision": usage.decision,
             }
         )
@@ -280,18 +302,28 @@ def summarize(df, cfg):
     grid = df["grid_used"].sum()
     battery = df["battery_used"].sum() + df["battery_charged"].sum()
     unmet = df["unmet_demand"].sum()
+    served = max(demand - unmet, 0)
     export = np.maximum(df["solar"] - df["solar_used"] - df["battery_charged"] / 0.9, 0).sum()
     battery_arbitrage = df["battery_used"].sum() * cfg["tariff"] * 0.15
     annual_factor = 8760 / max(len(df), 1)
     annual_savings = (solar * cfg["tariff"] + battery_arbitrage) * annual_factor
     payback_years = cfg["capex_rs"] / annual_savings if annual_savings > 0 else 0
     roi_pct = annual_savings / cfg["capex_rs"] * 100 if cfg["capex_rs"] > 0 else 0
+    outage_rows = df[df["grid_available"] == False] if "grid_available" in df else df.iloc[0:0]
+    peak_unmet = df["unmet_demand"].max()
+    reserve_gap = max(0, 30 - (0 if cfg["battery_capacity"] == 0 else df["battery_level"].iloc[-1] / cfg["battery_capacity"] * 100))
+    battery_addition = max(0, unmet / 0.9 + reserve_gap / 100 * cfg["battery_capacity"])
     return {
         "solar": solar,
         "demand": demand,
+        "served": served,
         "grid": grid,
         "battery": battery,
         "unmet": unmet,
+        "reliability": 100 if demand == 0 else served / demand * 100,
+        "peak_unmet": peak_unmet,
+        "outage_hours": len(outage_rows),
+        "recommended_battery_addition": battery_addition,
         "export": export,
         "co2": solar * cfg["co2_factor"],
         "self_suff": 0 if demand == 0 else min(100, (solar + df["battery_used"].sum()) / demand * 100),
@@ -319,7 +351,7 @@ def recommendations(df, cfg, summary):
     recs = []
 
     if summary["unmet"] > 0:
-        recs.append(("Critical", "Grid is unavailable and demand is not fully served. Reduce non-critical loads or raise reserve battery capacity."))
+        recs.append(("Critical", f"{summary['unmet']:.0f} kWh demand is unserved. Shed non-critical load or add about {summary['recommended_battery_addition']:.0f} kWh usable battery."))
     if summary["soc"] < 30:
         recs.append(("Warning", "Battery SOC is near reserve. Avoid deep discharge and schedule grid charging before the next evening peak."))
     if peak_grid > 0:
@@ -336,9 +368,96 @@ def recommendations(df, cfg, summary):
     return recs
 
 
+def operator_actions(df, cfg, summary):
+    actions = []
+    peak_grid = df[(df["hour"].between(18, 22)) & (df["grid_used"] > 0)]["grid_used"].sum()
+    flexible_load = summary["demand"] * 0.12
+
+    if summary["unmet"] > 0:
+        actions.append(("Immediate", f"Shed or reschedule {min(summary['peak_unmet'], flexible_load):.0f} kWh non-critical load during outage hours."))
+        actions.append(("Sizing", f"Add roughly {summary['recommended_battery_addition']:.0f} kWh usable battery to cover this scenario with reserve."))
+    if summary["soc"] < 30:
+        actions.append(("Battery", "Start pre-charging before evening peak and keep reserve above 30% for outage readiness."))
+    if peak_grid > 0:
+        actions.append(("Tariff", f"Shift {min(peak_grid * 0.25, flexible_load):.0f} kWh flexible load away from 18:00-22:00."))
+    if summary["export"] > summary["demand"] * 0.05:
+        actions.append(("Solar", f"{summary['export']:.0f} kWh solar is unused/exported. Move daytime loads or increase storage."))
+    if not actions:
+        actions.append(("Operate", "No urgent action. Keep current dispatch profile and monitor weather forecast before peak hours."))
+    return actions
+
+
 def auth_headers():
     token = st.session_state.get("token")
     return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+@st.cache_data(ttl=3600)
+def get_solar_forecast(lat=26.4499, lon=80.3319):
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {"latitude": lat, "longitude": lon, "forecast_days": 7, "timezone": "auto"}
+    try:
+        response = requests.get(
+            url,
+            params={**params, "hourly": "shortwave_radiation,cloud_cover,precipitation_probability,temperature_2m"},
+            timeout=6,
+        ).json()
+        hourly = response["hourly"]
+        return pd.DataFrame(
+            {
+                "Time": pd.to_datetime(hourly["time"]),
+                "Radiation (W/m2)": hourly["shortwave_radiation"],
+                "Cloud Cover (%)": hourly["cloud_cover"],
+                "Rain Probability (%)": hourly.get("precipitation_probability", [0] * len(hourly["time"])),
+                "Temperature (C)": hourly.get("temperature_2m", [0] * len(hourly["time"])),
+            }
+        )
+    except Exception as exc:
+        st.warning(f"Weather update failed: {exc}")
+        return None
+
+
+def current_or_next_solar_hour(weather_df):
+    now = pd.Timestamp.now()
+    upcoming = weather_df[weather_df["Time"] >= now]
+    daylight = upcoming[upcoming["Radiation (W/m2)"] > 25]
+    if not daylight.empty:
+        return daylight.iloc[0]
+    if not upcoming.empty:
+        return upcoming.iloc[0]
+    return weather_df.iloc[-1]
+
+
+def summarize_solar_forecast(weather_df):
+    df = weather_df.copy()
+    df["Date"] = df["Time"].dt.date
+    rows = []
+    for day, group in df.groupby("Date", sort=True):
+        daylight = group[group["Radiation (W/m2)"] > 25]
+        source = daylight if not daylight.empty else group
+        peak_radiation = float(group["Radiation (W/m2)"].max())
+        avg_daylight = float(source["Radiation (W/m2)"].mean())
+        avg_cloud = float(source["Cloud Cover (%)"].mean())
+        rain_risk = float(source["Rain Probability (%)"].max())
+        solar_score = max(0, min(100, (avg_daylight / 750 * 100) - (avg_cloud * 0.35) - (rain_risk * 0.15)))
+        if solar_score >= 70:
+            plan = "High solar: run flexible loads in daytime"
+        elif solar_score >= 45:
+            plan = "Moderate solar: keep battery reserve ready"
+        else:
+            plan = "Low solar: reduce daytime dependency"
+        rows.append(
+            {
+                "Day": pd.Timestamp(day).strftime("%a %d %b"),
+                "Peak Radiation": peak_radiation,
+                "Avg Daylight": avg_daylight,
+                "Avg Cloud": avg_cloud,
+                "Rain Risk": rain_risk,
+                "Solar Score": solar_score,
+                "Plan": plan,
+            }
+        )
+    return pd.DataFrame(rows).head(7)
 
 
 def fetch_weather_forecast(lat, lon):
@@ -400,6 +519,7 @@ def weather_adjusted_frame(cfg, controls, weather):
                 "battery_charged": usage.battery_charged,
                 "unmet_demand": usage.unmet_demand,
                 "battery_level": battery,
+                "grid_available": state.grid_available,
                 "decision": usage.decision,
             }
         )
@@ -422,7 +542,28 @@ def inject_css():
         <style>
         @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@600;700;800&display=swap');
         .stApp {{ background:{bg}; color:{text}; font-family:'Barlow',sans-serif; }}
-        #MainMenu, footer, header, [data-testid="collapsedControl"] {{ visibility:hidden; }}
+        #MainMenu, footer {{ visibility:hidden; }}
+        header {{ background:transparent !important; }}
+        [data-testid="collapsedControl"] {{
+            visibility:visible !important;
+            display:flex !important;
+            position:fixed !important;
+            top:12px !important;
+            left:12px !important;
+            z-index:9999 !important;
+            width:36px !important;
+            height:36px !important;
+            align-items:center !important;
+            justify-content:center !important;
+            border:1.5px solid {border} !important;
+            border-radius:6px !important;
+            background:{surface} !important;
+            box-shadow:0 6px 18px rgba(0,0,0,.08) !important;
+        }}
+        [data-testid="collapsedControl"] svg {{
+            color:{accent} !important;
+            stroke:{accent} !important;
+        }}
         .block-container {{ padding:0 !important; max-width:100% !important; }}
         .stApp::before {{
             content:''; position:fixed; inset:0; pointer-events:none; z-index:0;
@@ -480,12 +621,14 @@ def inject_css():
             border-color:{accent} !important;
             color:{accent} !important;
         }}
-        .side-brand {{ text-align:center; padding:22px 0 14px; color:{accent}; font-family:'Barlow Condensed'; font-weight:800; font-size:22px; letter-spacing:3px; }}
-        .side-brand div {{ font-size:9px; color:{muted}; letter-spacing:2.5px; text-transform:uppercase; }}
+        .side-brand {{ display:flex; align-items:center; justify-content:center; gap:10px; padding:18px 0 14px; color:{accent}; font-family:'Barlow Condensed'; font-weight:800; font-size:22px; letter-spacing:3px; }}
+        .side-logo {{ width:54px; height:54px; object-fit:cover; border-radius:8px; border:1px solid {border}; }}
+        .side-brand-text {{ line-height:1; text-align:left; }}
+        .side-brand-text div {{ margin-top:4px; font-size:9px; color:{muted}; letter-spacing:2.5px; text-transform:uppercase; }}
         .topbar {{ position:sticky; top:0; z-index:600; height:56px; background:{surface}; border-bottom:2px solid {border}; display:flex; align-items:center; }}
-        .brand-zone {{ padding:0 24px; min-width:200px; border-right:1.5px solid {border}; }}
+        .brand-zone {{ padding:0 24px; min-width:230px; border-right:1.5px solid {border}; display:flex; align-items:center; gap:10px; }}
+        .top-logo {{ width:40px; height:40px; object-fit:cover; border-radius:7px; border:1px solid {border}; }}
         .brand-name {{ font-family:'Barlow Condensed'; font-size:18px; font-weight:800; letter-spacing:3px; color:{accent}; text-transform:uppercase; }}
-        .brand-sub {{ font-size:9px; font-weight:700; letter-spacing:2.5px; color:{muted}; text-transform:uppercase; }}
         .topbar-center {{ flex:1; padding:0 24px; display:flex; gap:9px; align-items:center; }}
         .view-crumb {{ font-family:'Barlow Condensed'; font-size:12px; font-weight:700; letter-spacing:2px; text-transform:uppercase; color:{muted}; }}
         .view-crumb-active {{ color:{accent}; background:rgba(200,112,0,.08); padding:2px 10px; border-radius:3px; }}
@@ -499,7 +642,7 @@ def inject_css():
         .panel-head {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; padding-bottom:12px; border-bottom:1px solid {border}; }}
         .solo-head {{ background:{surface}; border:1.5px solid {border}; border-radius:8px 8px 0 0; padding:14px 16px; margin-bottom:0; }}
         .panel-title {{ font-family:'Barlow Condensed'; font-size:13px; font-weight:700; letter-spacing:2px; text-transform:uppercase; color:{text}; }}
-        .kpi-grid {{ display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-bottom:16px; }}
+        .kpi-grid {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:16px; }}
         .kpi-card {{ border-top:3px solid {accent}; padding:16px; }}
         .kpi-label, .flow-label {{ font-family:'Barlow Condensed'; font-size:9px; font-weight:700; letter-spacing:2.2px; text-transform:uppercase; color:{muted}; margin-bottom:8px; }}
         .kpi-val {{ font-family:'DM Mono'; font-size:24px; color:{text}; line-height:1; }}
@@ -589,7 +732,7 @@ def topbar(entity_type, view):
     st.markdown(
         f"""
         <div class="topbar">
-            <div class="brand-zone"><div class="brand-name">Indra-Grid</div><div class="brand-sub">Enterprise EMS</div></div>
+            <div class="brand-zone">{brand_logo_html("top-logo", 40)}<div class="brand-name">Indra-Grid</div></div>
             <div class="topbar-center"><span class="view-crumb">{entity_type}</span><span class="view-crumb">/</span><span class="view-crumb view-crumb-active">{view}</span></div>
             <div class="topbar-right"><span class="pulse-dot"></span><span class="view-crumb">Optimizer Live</span><span class="view-crumb">{timestamp}</span></div>
         </div>
@@ -606,7 +749,7 @@ def alert(text):
 
 
 def range_selector():
-    ranges = ["Day", "Week", "Month", "Year"]
+    ranges = ["Day", "Week", "Month"]
     st.radio("Range", ranges, key="range_sel", horizontal=True, label_visibility="collapsed")
 
 
@@ -614,14 +757,13 @@ def dashboard_view(df, cfg, summary, username, entity_type):
     st.markdown('<div class="page-pad"></div>', unsafe_allow_html=True)
     range_selector()
 
-    st.markdown('<div class="slabel">Key Performance Indicators</div>', unsafe_allow_html=True)
+    st.markdown('<div class="slabel">Live Simulator Summary</div>', unsafe_allow_html=True)
     kpis = "".join(
         [
             kpi("Solar Used", summary["solar"], "kWh", f"PR {cfg['pr']}%"),
             kpi("Total Demand", summary["demand"], "kWh", f"self-suff {summary['self_suff']:.0f}%", "neg"),
-            kpi("Battery Flow", summary["battery"], "kWh", f"SOC {summary['soc']:.0f}%"),
             kpi("Grid Import", summary["grid"], "kWh", f"Rs {summary['cost']/1000:.1f}K cost", "neg"),
-            kpi("CO2 Avoided", summary["co2"]/1000, "t", f"Rs {summary['savings']/1000:.1f}K saved"),
+            kpi("Reliability", summary["reliability"], "%", f"unmet {summary['unmet']:.0f} kWh", "neg" if summary["unmet"] else ""),
         ]
     )
     st.markdown(f'<div class="kpi-grid">{kpis}</div>', unsafe_allow_html=True)
@@ -631,23 +773,15 @@ def dashboard_view(df, cfg, summary, username, entity_type):
     st.markdown('<div class="panel-head solo-head"><span class="panel-title">Real-Time Energy Mix</span></div>', unsafe_allow_html=True)
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    c1, c2 = st.columns([1.2, 1])
+    solar_forecast_panel()
+
+    c1, c2 = st.columns([1.1, 1])
     with c1:
         live_inspector(df, cfg)
+        battery_soc_chart(df, cfg)
     with c2:
         recommendation_panel(df, cfg, summary)
-
-    c3, c4 = st.columns([1, 1])
-    with c3:
-        battery_soc_chart(df, cfg)
-    with c4:
-        report_actions(df, cfg, summary, username, entity_type)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        equipment_panel(df, cfg)
-    with col2:
-        performance_panel(summary, cfg)
+        action_plan_panel(df, cfg, summary)
 
 
 def kpi(label, value, unit, delta, cls=""):
@@ -686,12 +820,42 @@ def live_inspector(df, cfg):
     rows_panel("Live Simulation State", rows)
 
 
+def solar_forecast_panel():
+    weather_df = get_solar_forecast(st.session_state.weather_lat, st.session_state.weather_lon)
+    if weather_df is None or weather_df.empty:
+        return
+
+    forecast = summarize_solar_forecast(weather_df)
+    rows = ""
+    for _, day in forecast.iterrows():
+        score = float(day["Solar Score"])
+        tag = "tag-on" if score >= 70 else ("tag-warn" if score >= 45 else "tag-err")
+        rows += (
+            f'<div class="drow">'
+            f'<span class="drow-label">{day["Day"]}<br><span class="drow-val">{day["Plan"]}</span></span>'
+            f'<span class="drow-val">Peak {day["Peak Radiation"]:.0f} W/m2</span>'
+            f'<span class="drow-val">Cloud {day["Avg Cloud"]:.0f}%</span>'
+            f'<span class="drow-val">Rain {day["Rain Risk"]:.0f}%</span>'
+            f'<span class="tag {tag}">{score:.0f}</span>'
+            f'</div>'
+        )
+    st.markdown(f'<div class="slabel">7-Day Solar Weather Forecast</div><div class="panel">{rows}</div>', unsafe_allow_html=True)
+
+
 def recommendation_panel(df, cfg, summary):
     rec_html = ""
     for label, text in recommendations(df, cfg, summary):
         tag = "tag-err" if label == "Critical" else ("tag-warn" if label in {"Warning", "Peak", "Tariff"} else "tag-on")
         rec_html += f'<div class="drow"><span class="tag {tag}">{label}</span><span class="drow-label" style="flex:1;">{text}</span></div>'
     st.markdown(f'<div class="slabel">AI Recommendations</div><div class="panel">{rec_html}</div>', unsafe_allow_html=True)
+
+
+def action_plan_panel(df, cfg, summary):
+    rows = ""
+    for label, text in operator_actions(df, cfg, summary):
+        tag = "tag-err" if label == "Immediate" else ("tag-warn" if label in {"Sizing", "Battery", "Tariff"} else "tag-on")
+        rows += f'<div class="drow"><span class="tag {tag}">{label}</span><span class="drow-label" style="flex:1;">{text}</span></div>'
+    st.markdown(f'<div class="slabel">Operator Action Plan</div><div class="panel">{rows}</div>', unsafe_allow_html=True)
 
 
 def battery_soc_chart(df, cfg):
@@ -741,7 +905,8 @@ def report_actions(df, cfg, summary, username, entity_type):
             "notes": recommendations(df, cfg, summary)[0][1],
         }
         try:
-            res = requests.post(f"{API}/runs", json=payload, headers=auth_headers(), timeout=4).json()
+            with st.spinner("Saving simulation run..."):
+                res = requests.post(f"{API}/runs", json=payload, headers=auth_headers(), timeout=4).json()
             if res.get("status") == "success":
                 st.success(f"Saved run #{res['id']}")
             else:
@@ -754,7 +919,7 @@ def build_text_report(summary, cfg, entity_type):
     carbon_credit_rate = 1200
     credits = summary["co2"] / 1000 * carbon_credit_rate
     return (
-        f"Indra-Grid EMS Summary\n"
+        f"Indra-Grid Summary\n"
         f"Generated: {datetime.now().strftime('%d %b %Y %H:%M')}\n"
         f"Entity: {entity_type}\n\n"
         f"Solar Used: {summary['solar']:.1f} kWh\n"
@@ -851,13 +1016,15 @@ def energy_flow_view(df, cfg, summary):
 
     sankey = go.Figure(
         go.Sankey(
-            arrangement="snap",
+            arrangement="fixed",
             node=dict(
-                pad=20,
-                thickness=18,
+                pad=24,
+                thickness=20,
                 line=dict(color="#E8DDD0", width=0.5),
                 label=["Solar", "Grid", "Battery", "Facility Load", "Unmet"],
                 color=["#C87000", "#C84000", "#4A90D9", "#E8A840", "#777777"],
+                x=[0.02, 0.02, 0.02, 0.92, 0.92],
+                y=[0.18, 0.48, 0.76, 0.34, 0.78],
             ),
             link=dict(
                 source=[0, 1, 2, 4],
@@ -872,7 +1039,7 @@ def energy_flow_view(df, cfg, summary):
             ),
         )
     )
-    sankey.update_layout(height=310, margin=dict(l=0, r=0, t=4, b=0), paper_bgcolor="rgba(0,0,0,0)")
+    sankey.update_layout(height=380, margin=dict(l=20, r=20, t=10, b=30), paper_bgcolor="rgba(0,0,0,0)")
     st.markdown('<div class="slabel">Energy Sankey - Selected Range</div><div class="panel-head solo-head"><span class="panel-title">Source to Load Sankey</span></div>', unsafe_allow_html=True)
     st.plotly_chart(sankey, use_container_width=True, config={"displayModeBar": False})
 
@@ -891,6 +1058,7 @@ def energy_flow_view(df, cfg, summary):
             ("Solar Share", pct(summary["solar"], summary["demand"])),
             ("Grid Share", pct(summary["grid"], summary["demand"])),
             ("Battery Share", pct(df["battery_used"].sum(), summary["demand"])),
+            ("Unmet Demand", f"{summary['unmet']:.1f} kWh"),
             ("CO2 Intensity", f"{summary['grid'] * cfg['co2_factor'] / max(summary['demand'], 1) * 1000:.0f} gCO2/kWh"),
         ])
 
@@ -903,43 +1071,79 @@ def flow_card(label, value, max_value, meta):
     return f'<div class="flow-card"><div class="flow-label">{label}</div><div class="flow-val">{value:.1f} kWh</div><div class="flow-bar-track"><div class="flow-bar-fill" style="width:{width:.0f}%"></div></div><div class="drow-val" style="text-align:left;margin-top:6px;">{meta}</div></div>'
 
 
-def active_faults(cfg):
-    return [f for f in fault_data(cfg) if f[3] == "active"]
+def active_faults(df, cfg, summary):
+    return [f for f in fault_data(df, cfg, summary) if f[3] == "active"]
 
 
-def fault_data(cfg):
-    try:
-        res = requests.get(f"{API}/faults", headers=auth_headers(), timeout=4)
-        if res.status_code == 200:
-            rows = res.json()
-            if rows:
-                return [
-                    (
-                        item["title"],
-                        item["location"],
-                        item["created_at"][:16].replace("T", " "),
-                        item["status"],
-                        item["priority"],
-                    )
-                    for item in rows
-                ]
-    except Exception:
-        pass
+def fault_data(df, cfg, summary):
+    now = datetime.now().strftime("%d %b %Y %H:%M IST")
+    faults = []
 
-    return [
-        ("Battery Cell Over-Temp", cfg["battery_label"], "30 Apr 2026 14:10 IST", "active", "P1"),
-        ("Grid Communication Loss", cfg["grid_label"], "30 Apr 2026 13:48 IST", "active", "P2"),
-        ("Solar MPPT Deviation >5%", cfg["solar_label"], "29 Apr 2026 18:36 IST", "resolved", "P3"),
-        ("Battery Low SOC <20%", cfg["battery_label"], "28 Apr 2026 07:10 IST", "resolved", "P2"),
-        ("Peak Demand Threshold Hit", cfg["load_label"], "27 Apr 2026 08:00 IST", "resolved", "P3"),
-    ]
+    if summary["unmet"] > 0:
+        worst = df.loc[df["unmet_demand"].idxmax()]
+        faults.append((
+            "Unserved Load During Outage",
+            f"{cfg['load_label']} | Step {int(worst['step'])} {worst['time']}",
+            now,
+            "active",
+            "P1",
+        ))
+
+    if summary["soc"] < 25:
+        faults.append((
+            "Battery SOC Below Operating Reserve",
+            cfg["battery_label"],
+            now,
+            "active",
+            "P2",
+        ))
+
+    if "grid_available" in df and not bool(df["grid_available"].all()):
+        outage_hours = df[df["grid_available"] == False]["time"].tolist()
+        faults.append((
+            "Grid Outage Window Detected",
+            f"{cfg['grid_label']} | {', '.join(outage_hours[:3])}",
+            now,
+            "active" if summary["unmet"] > 0 else "resolved",
+            "P2",
+        ))
+
+    evening_grid = df[(df["hour"].between(18, 22)) & (df["grid_used"] > 0)]["grid_used"].sum()
+    if evening_grid > summary["demand"] * 0.08:
+        faults.append((
+            "High Peak-Hour Grid Import",
+            f"{cfg['grid_label']} | {evening_grid:.0f} kWh evening import",
+            now,
+            "active",
+            "P3",
+        ))
+
+    if summary["export"] > summary["demand"] * 0.05:
+        faults.append((
+            "Solar Surplus Not Fully Stored",
+            f"{cfg['solar_label']} | {summary['export']:.0f} kWh export",
+            now,
+            "resolved",
+            "P3",
+        ))
+
+    if not faults:
+        faults.append((
+            "No Critical Operational Faults",
+            "Optimizer dispatch is within reserve and reliability limits",
+            now,
+            "resolved",
+            "P3",
+        ))
+
+    return faults
 
 
-def fault_log_view(cfg):
-    faults = fault_data(cfg)
+def fault_log_view(df, cfg, summary):
+    faults = fault_data(df, cfg, summary)
     st.markdown('<div class="page-pad"></div>', unsafe_allow_html=True)
     total = len(faults)
-    active = len(active_faults(cfg))
+    active = len(active_faults(df, cfg, summary))
     resolved = total - active
     fault_kpis = "".join(
         [
@@ -1023,8 +1227,9 @@ def forecast_view(cfg, controls):
 
     forecast_controls = dict(controls)
     forecast_controls["seed"] = int(controls["seed"]) + 1
-    weather = fetch_weather_forecast(controls["weather_lat"], controls["weather_lon"])
-    df = weather_adjusted_frame(cfg, forecast_controls, weather)
+    with st.spinner("Fetching weather forecast and recalculating dispatch..."):
+        weather = fetch_weather_forecast(controls["weather_lat"], controls["weather_lon"])
+        df = weather_adjusted_frame(cfg, forecast_controls, weather)
 
     summary = summarize(df, cfg)
     kpis = "".join(
@@ -1074,7 +1279,8 @@ def admin_view(role):
     col1, col2 = st.columns(2)
     with col1:
         try:
-            users = requests.get(f"{API}/users", headers=auth_headers(), timeout=4).json()
+            with st.spinner("Loading registered users..."):
+                users = requests.get(f"{API}/users", headers=auth_headers(), timeout=4).json()
             if not isinstance(users, list):
                 st.error(users.get("detail", "Could not load users."))
                 users = []
@@ -1088,7 +1294,8 @@ def admin_view(role):
 
     with col2:
         try:
-            runs = requests.get(f"{API}/runs?limit=12", headers=auth_headers(), timeout=4).json()
+            with st.spinner("Loading saved simulation runs..."):
+                runs = requests.get(f"{API}/runs?limit=12", headers=auth_headers(), timeout=4).json()
             if not isinstance(runs, list):
                 st.error(runs.get("detail", "Could not load saved runs."))
                 runs = []
@@ -1136,12 +1343,6 @@ def account_view(username, role, cfg, entity_type):
             ("Grid System", cfg["grid_label"]),
             ("Monitoring Protocol", "IEC 61850 / ModBus TCP"),
         ])
-    rows_panel("Support & Contacts", [
-        ("Technical Support", "support@indra-grid.in - 24x7"),
-        ("DISCOM Contact", "PVVNL Kanpur - 1912"),
-        ("Software Version", "Indra-Grid EMS v3.4.1"),
-    ])
-
 
 def rows_panel(title, rows):
     rows_html = ""
@@ -1158,6 +1359,6 @@ def pct(numerator, denominator):
 
 
 def bottom_bar(view):
-    items = [("Dashboard", "Plant"), ("Energy Flow", "Flow"), ("Fault Log", "Faults"), ("Analytics", "Analytics"), ("Forecast", "Forecast"), ("Admin", "Admin"), ("Account", "Account")]
+    items = [("Live Simulator", "Live"), ("Energy Flow", "Flow"), ("Account", "Account")]
     html = "".join(f'<div class="bb-item {"bb-active" if name == view else ""}">{label}</div>' for name, label in items)
     st.markdown(f'<div class="bottom-bar">{html}</div>', unsafe_allow_html=True)

@@ -9,7 +9,7 @@ Indra-Grid is an energy management simulator for MSMEs and small campuses. It sh
 3. `backend/api.py` exposes login, registration, saved-run history, health, and optimizer APIs.
 4. `backend/api.py` also exposes protected admin APIs, database-backed fault events, and a weather forecast API.
 5. `dashboard/app.py` handles login/register and launches the Streamlit dashboard.
-6. `dashboard/dashboard.py` renders the enterprise dashboard, demo scenarios, ROI/payback metrics, weather-aware forecasts, charts, reports, recommendations, admin view, and account view.
+6. `dashboard/dashboard.py` renders the enterprise dashboard, demo scenarios, ROI/payback metrics, weather-aware forecasts, charts, reports, recommendations, a judge pitch view, admin view, and account view.
 6. `integration/run.py` regenerates data, starts the backend, and opens the Streamlit app.
 
 ## Important Functions
@@ -73,6 +73,7 @@ Indra-Grid is an energy management simulator for MSMEs and small campuses. It sh
 - `analytics_view`, `make_monthly`: generate six-month comparative analytics.
 - `forecast_view`: simulates tomorrow using a changed seed.
 - `weather_panel`: displays the weather API status, cloud cover, rain probability, and temperature.
+- `pitch_view`: gives judges a single explanation screen covering the real problem, dispatch logic, weather layer, business value, and demo path.
 - `admin_view`: shows users and saved runs for Admin users.
 - `account_view`: shows plant registration, technical specs, and support contacts.
 - `rows_panel`, `pct`, `kpi`, `flow_node`, `flow_card`, `chart_layout`: reusable UI helpers.
@@ -89,6 +90,7 @@ Indra-Grid is an energy management simulator for MSMEs and small campuses. It sh
 - Added ROI, payback, annualized savings, and battery arbitrage metrics.
 - Added database-backed fault events.
 - Added a weather forecast API and weather-aware forecast dashboard.
+- Added a judge pitch mode so the team can explain the project without sounding scripted or AI-generated.
 
 ## Next Best Improvements
 
