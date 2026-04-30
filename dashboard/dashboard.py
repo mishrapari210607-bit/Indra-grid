@@ -464,12 +464,13 @@ def inject_css():
 
 
 def topbar(entity_type, view):
+    timestamp = datetime.now().strftime("%d %b %Y %H:%M IST")
     st.markdown(
         f"""
         <div class="topbar">
             <div class="brand-zone"><div class="brand-name">Indra-Grid</div><div class="brand-sub">Enterprise EMS</div></div>
             <div class="topbar-center"><span class="view-crumb">{entity_type}</span><span class="view-crumb">/</span><span class="view-crumb view-crumb-active">{view}</span></div>
-            <div class="topbar-right"><span class="pulse-dot"></span><span class="view-crumb">Optimizer Live</span><span class="view-crumb">30 Apr 2026 14:22 IST</span></div>
+            <div class="topbar-right"><span class="pulse-dot"></span><span class="view-crumb">Optimizer Live</span><span class="view-crumb">{timestamp}</span></div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -963,7 +964,6 @@ def account_view(username, role, cfg, entity_type):
             ("Monitoring Protocol", "IEC 61850 / ModBus TCP"),
         ])
     rows_panel("Support & Contacts", [
-        ("Account Manager", "Rajesh Sharma - +91 98765 43210"),
         ("Technical Support", "support@indra-grid.in - 24x7"),
         ("DISCOM Contact", "PVVNL Kanpur - 1912"),
         ("Software Version", "Indra-Grid EMS v3.4.1"),

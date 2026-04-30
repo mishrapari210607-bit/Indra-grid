@@ -4,7 +4,7 @@ import hmac
 import os
 from jose import jwt
 
-SECRET_KEY = "secret123"
+SECRET_KEY = os.getenv("INDRA_GRID_SECRET_KEY", "dev-only-change-me")
 ALGORITHM = "HS256"
 HASH_ITERATIONS = 120_000
 
@@ -45,5 +45,5 @@ def verify_token(token):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload["sub"]
-    except:
+    except Exception:
         return None

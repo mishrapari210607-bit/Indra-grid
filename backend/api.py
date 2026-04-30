@@ -12,6 +12,8 @@ from logic.optimizer import EnergyOptimizer, EnergyState
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
 
+VALID_ROLES = {"Owner", "Operator", "Admin"}
+
 
 class UserPayload(BaseModel):
     username: str
@@ -48,6 +50,11 @@ def clean_username(username: str) -> str:
     return username.strip().lower()
 
 
+def clean_role(role: str) -> str:
+    role = role.strip()
+    return role if role in VALID_ROLES else "Operator"
+
+
 def migrate_sqlite_schema():
     with engine.begin() as conn:
         try:
@@ -61,11 +68,20 @@ def migrate_sqlite_schema():
 migrate_sqlite_schema()
 
 
+@app.get("/health")
+def health():
+    return {
+        "status": "ok",
+        "service": "Indra-Grid API",
+        "optimizer": "online",
+    }
+
+
 @app.post("/register")
 def register(user: UserPayload):
     username = clean_username(user.username)
     password = user.password.strip()
-    role = user.role.strip() or "Operator"
+    role = clean_role(user.role or "Operator")
 
     if not username or not password:
         return {"status": "error", "message": "Username and password are required"}

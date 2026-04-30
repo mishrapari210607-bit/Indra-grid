@@ -1,120 +1,81 @@
-# ⚡ Indra-Grid  
-### AI-Driven Energy Optimizer for MSMEs
+# Indra-Grid
 
----
+AI-driven energy management for MSMEs, factories, commercial buildings, data centres, and residential campuses.
 
-## 🚀 Overview  
-Indra-Grid is a smart energy management system that helps small-scale factories reduce electricity costs and avoid downtime by intelligently switching between Solar, Battery, and Grid power.
+Indra-Grid simulates solar generation, electricity demand, grid prices, battery storage, and grid availability. It then decides how to dispatch solar, battery, and grid power to reduce electricity cost, preserve battery reserve, and keep critical loads running during outages.
 
----
+## Why It Matters
 
-## ❗ Problem Statement  
-Factories in India face:
-- High electricity costs during peak hours  
-- Frequent power cuts causing production loss  
-- Manual and inefficient energy usage  
+Small and medium businesses often lose money through peak-hour tariffs, grid outages, and manual energy decisions. Indra-Grid acts like an energy autopilot: it uses solar first, stores surplus energy, uses the battery during expensive or failed-grid periods, and reports cost, carbon, and reliability impact.
 
----
+## Features
 
-## 💡 Our Solution  
-Indra-Grid acts as an intelligent autopilot for factory energy.
+- Solar, battery, and grid dispatch optimizer
+- Peak shaving during expensive tariff windows
+- Island-mode behavior when the grid is unavailable
+- Battery reserve protection
+- CO2 avoided, grid cost, savings, self-sufficiency, and final SOC metrics
+- Enterprise Streamlit dashboard with KPIs, charts, Sankey energy flow, analytics, forecast, admin console, account view, reports, and CSV export
+- FastAPI backend with registration, login, saved simulation runs, optimizer API, and health check
+- SQLite persistence for users and saved runs
+- Regression tests for core optimizer behavior
 
-It:
-- Uses solar energy whenever available  
-- Stores extra energy in a battery  
-- Switches to battery during peak cost hours  
-- Ensures continuous operation during power cuts  
+## Project Structure
 
----
+```text
+backend/       FastAPI app, auth, database models
+dashboard/     Streamlit login and enterprise dashboard
+data/          Scenario simulator and generated CSV
+logic/         Energy optimizer
+integration/   One-command local runner
+tests/         Optimizer regression tests
+docs/          Project explanation and judging notes
+```
 
-## ⚙️ System Architecture  
+## Run Locally
 
-CSV Data (Solar, Demand, Price)  
-↓  
-Decision Engine (Optimization Logic)  
-↓  
-Output CSV (Energy Usage)  
-↓  
-Dashboard (Visualization)  
+Install dependencies:
 
----
+```bash
+pip install -r requirements.txt
+```
 
-## 📊 Features  
+Start the full demo:
 
-- 🔥 **Peak Shaving** → Reduces cost during expensive hours  
-- 🏝️ **Island Mode** → Runs even during grid failure  
-- 💰 **Cost Optimization** → Minimizes electricity bill  
-- 🌱 **Green Score** → Tracks renewable energy usage  
-- 📉 **Before vs After Comparison** → Shows money saved  
+```bash
+python integration/run.py
+```
 
----
+Or start services separately:
 
-## 📁 Project Structure  
+```bash
+python -m uvicorn backend.api:app --host 127.0.0.1 --port 8001 --reload
+streamlit run dashboard/app.py
+```
 
-indra-grid/  
-│  
-├── data/              # Data generation (CSV)  
-├── logic/             # Decision engine  
-├── dashboard/         # Streamlit UI  
-├── integration/       # System runner  
-├── output.csv         # Generated output  
-└── README.md  
+Run tests:
 
----
+```bash
+python -m unittest discover -s tests
+```
 
-## ▶️ How to Run  
+Optional production-style secret:
 
-Step 1: Run the system  
-python integration/run.py  
+```bash
+set INDRA_GRID_SECRET_KEY=replace-with-a-long-random-secret
+```
 
-Step 2: Launch dashboard  
-streamlit run dashboard/app.py  
+## Demo Story
 
----
+1. Register or log in.
+2. Select an entity type such as Industrial Plant or Data Centre.
+3. Change demand multiplier, initial battery SOC, grid availability, and simulation seed.
+4. Show the main dashboard KPIs and dispatch chart.
+5. Turn grid availability off to demonstrate island mode and unmet-demand alerts.
+6. Open Energy Flow for the Sankey diagram.
+7. Open Forecast to show tomorrow's projected dispatch.
+8. Save a simulation run and show it in the Admin view.
 
-## 📈 Demo Output  
+## Impact
 
-- Energy usage split (Solar / Battery / Grid)  
-- Battery level tracking  
-- Total cost calculation  
-- Money saved compared to baseline  
-
----
-
-## 🧠 Tech Stack  
-
-- Python  
-- CSV Data Handling  
-- Streamlit Dashboard  
-- GitHub (Collaboration)  
-
----
-
-## 👥 Team  
-
-👑 Pari – Data & Team Lead
-⚙️ Shambhavi – Dashboard
-📊 Sampoorna – Decision & L
-🔗 Laxmi – Integration & Presentation
-
----
-
-## 🔮 Future Scope  
-
-- Real-time IoT integration  
-- Machine Learning forecasting  
-- Smart factory deployment  
-
----
-
-## 🏆 Impact  
-
-- Reduces electricity costs  
-- Prevents production downtime  
-- Supports sustainable energy usage  
-
----
-
-## ⭐ Final Note  
-
-Indra-Grid demonstrates how intelligent energy management can make MSMEs more efficient, resilient, and eco-friendly.
+Indra-Grid demonstrates how intelligent energy management can reduce electricity bills, avoid outage losses, improve renewable self-consumption, and make energy decisions understandable for operators.
