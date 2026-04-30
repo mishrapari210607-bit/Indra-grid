@@ -166,6 +166,7 @@ def register(user: UserPayload):
 def login(user: UserPayload):
     username = clean_username(user.username)
     password = user.password.strip()
+    requested_role = clean_role(user.role or "Operator")
 
     db = SessionLocal()
     try:
@@ -173,6 +174,9 @@ def login(user: UserPayload):
         if existing and verify_password(password, existing.password):
             if not existing.password.startswith("pbkdf2_sha256$"):
                 existing.password = hash_password(password)
+            if requested_role in {"Owner", "Operator"} and existing.role != requested_role:
+                existing.role = requested_role
+            if db.is_modified(existing):
                 db.commit()
             return {
                 "status": "success",

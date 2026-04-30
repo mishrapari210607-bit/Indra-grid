@@ -157,7 +157,7 @@ def login():
 
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
-    role = st.selectbox("Role for registration", ["Owner", "Operator"])
+    role = st.selectbox("Role", ["Owner", "Operator"])
     col1, col2 = st.columns(2)
 
     if col1.button("Login", use_container_width=True):
@@ -165,7 +165,7 @@ def login():
             with st.spinner("Verifying credentials..."):
                 res = requests.post(
                     f"{API}/login",
-                    json={"username": username, "password": password},
+                    json={"username": username, "password": password, "role": role},
                     timeout=4,
                 ).json()
             if res.get("status") == "success":

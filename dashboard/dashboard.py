@@ -653,6 +653,8 @@ def inject_css():
         .drow:last-child {{ border-bottom:none; }}
         .drow-label {{ font-weight:600; color:{text}; }}
         .drow-val {{ font-family:'DM Mono'; font-size:11px; color:{muted}; text-align:right; }}
+        .forecast-row {{ display:grid; grid-template-columns:120px minmax(280px,1fr) 150px 120px 110px 44px; align-items:center; gap:14px; padding:10px 0; border-bottom:1px solid {'#242018' if dk else '#F5F0E8'}; font-size:12px; }}
+        .forecast-row:last-child {{ border-bottom:none; }}
         .tag {{ font-family:'Barlow Condensed'; font-size:9px; font-weight:700; letter-spacing:2px; text-transform:uppercase; padding:3px 9px; border-radius:3px; white-space:nowrap; }}
         .tag-on {{ background:rgba(58,140,80,.12); color:{green}; border:1px solid rgba(58,140,80,.3); }}
         .tag-warn {{ background:rgba(200,112,0,.12); color:{accent}; border:1px solid rgba(200,112,0,.3); }}
@@ -831,8 +833,9 @@ def solar_forecast_panel():
         score = float(day["Solar Score"])
         tag = "tag-on" if score >= 70 else ("tag-warn" if score >= 45 else "tag-err")
         rows += (
-            f'<div class="drow">'
-            f'<span class="drow-label">{day["Day"]}<br><span class="drow-val">{day["Plan"]}</span></span>'
+            f'<div class="forecast-row">'
+            f'<span class="drow-label">{day["Day"]}</span>'
+            f'<span class="drow-val">{day["Plan"]}</span>'
             f'<span class="drow-val">Peak {day["Peak Radiation"]:.0f} W/m2</span>'
             f'<span class="drow-val">Cloud {day["Avg Cloud"]:.0f}%</span>'
             f'<span class="drow-val">Rain {day["Rain Risk"]:.0f}%</span>'
@@ -993,17 +996,16 @@ def performance_panel(summary, cfg):
 def energy_flow_view(df, cfg, summary):
     latest = df.iloc[-1]
     st.markdown('<div class="page-pad"></div>', unsafe_allow_html=True)
-    st.markdown('<div class="slabel">Live Energy Flow</div>', unsafe_allow_html=True)
-    flow_html = (
-        f'<div class="panel flow-diagram">'
-        f'{flow_node("SOL", cfg["solar_label"], latest["solar_used"])}'
-        f'<div class="flow-arrow">--></div>'
-        f'{flow_node("BUS", "Energy Bus", latest["demand"])}'
-        f'<div class="flow-arrow">--></div>'
-        f'{flow_node("LOD", cfg["load_label"], latest["demand"])}'
-        f'</div>'
-    )
-    st.markdown(flow_html, unsafe_allow_html=True)
+    st.markdown('<div class="slabel">Current Hour Energy Flow</div>', unsafe_allow_html=True)
+    current_rows = [
+        ("Time", f"Step {int(latest['step'])} | {latest['time']}"),
+        ("Solar to Load", f"{latest['solar_used']:.1f} kWh"),
+        ("Battery to Load", f"{latest['battery_used']:.1f} kWh"),
+        ("Grid to Load", f"{latest['grid_used']:.1f} kWh"),
+        ("Facility Demand", f"{latest['demand']:.1f} kWh"),
+        ("Optimizer Decision", latest["decision"]),
+    ]
+    rows_panel("Current Source Mix", current_rows)
 
     flow_cards = "".join(
         [
@@ -1023,12 +1025,12 @@ def energy_flow_view(df, cfg, summary):
                 line=dict(color="#E8DDD0", width=0.5),
                 label=["Solar", "Grid", "Battery", "Facility Load", "Unmet"],
                 color=["#C87000", "#C84000", "#4A90D9", "#E8A840", "#777777"],
-                x=[0.02, 0.02, 0.02, 0.92, 0.92],
-                y=[0.18, 0.48, 0.76, 0.34, 0.78],
+                x=[0.02, 0.02, 0.02, 0.78, 0.96],
+                y=[0.18, 0.48, 0.76, 0.42, 0.74],
             ),
             link=dict(
-                source=[0, 1, 2, 4],
-                target=[3, 3, 3, 3],
+                source=[0, 1, 2, 3],
+                target=[3, 3, 3, 4],
                 value=[
                     max(summary["solar"], 0.1),
                     max(summary["grid"], 0.1),
@@ -1040,7 +1042,7 @@ def energy_flow_view(df, cfg, summary):
         )
     )
     sankey.update_layout(height=380, margin=dict(l=20, r=20, t=10, b=30), paper_bgcolor="rgba(0,0,0,0)")
-    st.markdown('<div class="slabel">Energy Sankey - Selected Range</div><div class="panel-head solo-head"><span class="panel-title">Source to Load Sankey</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="slabel">Selected Range Energy Flow</div><div class="panel-head solo-head"><span class="panel-title">Total Source to Load Sankey</span></div>', unsafe_allow_html=True)
     st.plotly_chart(sankey, use_container_width=True, config={"displayModeBar": False})
 
     col1, col2 = st.columns(2)
@@ -1314,7 +1316,7 @@ def account_view(username, role, cfg, entity_type):
         f"""
         <div class="panel" style="border-top:3px solid #C87000;">
             <div class="panel-title" style="font-size:20px;">{username or "Chandrakanti Devi"}</div>
-            <div class="drow-val" style="text-align:left;margin-top:4px;">{entity_type} {role} | PSIT Kanpur</div>
+            <div class="drow-val" style="text-align:left;margin-top:4px;">{role} | {entity_type} | PSIT Kanpur</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1327,7 +1329,6 @@ def account_view(username, role, cfg, entity_type):
             ("Role", role),
             ("Organisation", "PSIT Kanpur"),
             ("Entity Type", entity_type),
-            ("Commissioning Date", "12 Jan 2024"),
             ("Grid Connection", cfg["grid_conn"]),
             ("Tariff Zone", "UP - Zone B"),
             ("Applicable Tariff", f"Rs {cfg['tariff']:.2f}/kWh"),
