@@ -1,4 +1,9 @@
 streamlit
+fastapi
+uvicorn
+requests
+sqlalchemy
+python-jose
 pandas
 numpy
 plotly
