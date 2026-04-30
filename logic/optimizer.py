@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-# ─── INPUT STATE ─────────────────────────────────────
+
 @dataclass
 class EnergyState:
     solar: float
@@ -12,81 +12,74 @@ class EnergyState:
     peak_hour: bool
 
 
-# ─── OUTPUT ──────────────────────────────────────────
 @dataclass
 class EnergyUsage:
     solar_used: float = 0.0
     battery_used: float = 0.0
     grid_used: float = 0.0
     battery_charged: float = 0.0
-    decision: str = ""   # 🔥 NEW (for dashboard insight)
+    unmet_demand: float = 0.0
+    decision: str = ""
 
 
-# ─── OPTIMIZER ───────────────────────────────────────
 class EnergyOptimizer:
+    charge_efficiency = 0.90
+    discharge_efficiency = 0.90
+    reserve_fraction = 0.20
+    high_price_threshold = 8.0
 
     def optimize(self, s: EnergyState):
         usage = EnergyUsage()
+        battery = max(0.0, min(s.battery_level, s.battery_capacity))
+        remaining_demand = max(s.demand, 0.0)
+        solar_available = max(s.solar, 0.0)
 
-        # ─── Safety ───────────────────────────────────
-        battery = max(0, min(s.battery_level, s.battery_capacity))
-        remaining_demand = max(s.demand, 0)
-
-        CHARGE_EFF = 0.9
-        DISCHARGE_EFF = 0.9
-
-        # ─── 1. Solar First ───────────────────────────
-        usage.solar_used = min(s.solar, remaining_demand)
+        usage.solar_used = min(solar_available, remaining_demand)
         remaining_demand -= usage.solar_used
 
-        # ─── 2. Store Excess Solar ────────────────────
-        if s.solar > s.demand:
-            excess = s.solar - s.demand
-            available_space = max(s.battery_capacity - battery, 0)
+        excess_solar = max(solar_available - usage.solar_used, 0.0)
+        if excess_solar > 0:
+            available_space = max(s.battery_capacity - battery, 0.0)
+            usage.battery_charged = min(excess_solar * self.charge_efficiency, available_space)
+            battery += usage.battery_charged
 
-            charge = min(excess * CHARGE_EFF, available_space)
-            usage.battery_charged = charge
-            battery += charge
-
-       
-                # ─── 3. Battery Decision ──────────────────────
         use_battery = (
-            s.peak_hour or
-            not s.grid_available or
-            s.grid_price > 8
+            s.peak_hour
+            or not s.grid_available
+            or s.grid_price > self.high_price_threshold
         )
 
         if use_battery and remaining_demand > 0:
+            reserve = self.reserve_fraction * s.battery_capacity
+            usable_battery = max(0.0, battery - reserve)
+            deliverable_energy = usable_battery * self.discharge_efficiency
 
-            reserve = 0.2 * s.battery_capacity   # 🔥 keep 20% safety
-            usable_battery = max(0, battery - reserve)
+            usage.battery_used = min(remaining_demand, deliverable_energy)
+            battery_draw = usage.battery_used / self.discharge_efficiency if usage.battery_used else 0.0
+            battery -= battery_draw
+            remaining_demand -= usage.battery_used
 
-            usable_energy = usable_battery * DISCHARGE_EFF
+        if remaining_demand > 0 and s.grid_available:
+            usage.grid_used = remaining_demand
+            remaining_demand = 0.0
 
-            used = min(remaining_demand, usable_energy)
-            usage.battery_used = used
-
-            battery -= used
-            remaining_demand -= used
-
-            usage.decision = "Battery used (with safety reserve)"
-        # ─── 4. Grid Fallback ─────────────────────────
-        if remaining_demand > 0:
-            if s.grid_available:
-                usage.grid_used = remaining_demand
-                usage.decision = "Grid used (deficit)"
-                remaining_demand = 0
-            else:
-                usage.decision = "Power deficit (no grid)"
-
-        # ─── 5. Final Clamp ───────────────────────────
-        battery = max(0, min(battery, s.battery_capacity))
-
-        # ─── Default decision if nothing triggered ────
-        if usage.decision == "":
-            if usage.battery_charged > 0:
-                usage.decision = "Solar surplus → charging battery"
-            else:
-                usage.decision = "Solar handled demand"
+        usage.unmet_demand = max(remaining_demand, 0.0)
+        battery = max(0.0, min(battery, s.battery_capacity))
+        usage.decision = self._decision_for(usage, use_battery, s.grid_available)
 
         return usage, battery
+
+    def _decision_for(self, usage: EnergyUsage, use_battery: bool, grid_available: bool) -> str:
+        if usage.unmet_demand > 0:
+            return "Power deficit - no grid available"
+        if usage.battery_used > 0 and usage.grid_used > 0:
+            return "Battery + grid used for peak deficit"
+        if usage.battery_used > 0:
+            return "Battery used with 20% safety reserve"
+        if usage.grid_used > 0:
+            return "Grid used for remaining demand"
+        if usage.battery_charged > 0:
+            return "Solar surplus charging battery"
+        if use_battery and not grid_available:
+            return "Solar handled demand while islanded"
+        return "Solar handled demand"
