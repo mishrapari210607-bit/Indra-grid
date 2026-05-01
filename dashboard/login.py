@@ -2,11 +2,13 @@ import streamlit as st
 import requests
 import dashboard
 
+# Legacy Streamlit login entrypoint kept for older dashboard runs.
 st.set_page_config(page_title="Indra-Grid", layout="wide")
 
 API_URL = "http://127.0.0.1:8000"
 
 # ─── SESSION ─────────────────
+# Store login token and username across Streamlit reruns.
 if "token" not in st.session_state:
     st.session_state.token = None
 
@@ -15,6 +17,7 @@ if "user" not in st.session_state:
 
 # ─── LOGIN UI ─────────────────
 def login():
+    # Simple login/register form for the older backend port.
     st.title("🔐 Indra-Grid Login")
 
     username = st.text_input("Username")
@@ -25,6 +28,7 @@ def login():
     # LOGIN
     if col1.button("Login"):
         try:
+            # Send credentials to backend and store token on success.
             res = requests.post(
                 f"{API_URL}/login",
                 json={"username": username, "password": password}
@@ -46,6 +50,7 @@ def login():
     # REGISTER
     if col2.button("Register"):
         try:
+            # Create account through backend register API.
             res = requests.post(
                 f"{API_URL}/register",
                 json={"username": username, "password": password}
@@ -63,6 +68,7 @@ def login():
 
 # ─── MAIN APP ─────────────────
 def app():
+    # Authenticated area with logout button and dashboard handoff.
     with st.sidebar:
         st.success(f"👤 {st.session_state.user}")
 
@@ -74,6 +80,7 @@ def app():
     dashboard.run()
 
 # ─── ROUTER ─────────────────
+# Route user to login until a token exists.
 if not st.session_state.token:
     login()
 else:

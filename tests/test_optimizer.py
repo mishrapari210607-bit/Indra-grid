@@ -5,9 +5,11 @@ from logic.optimizer import EnergyOptimizer, EnergyState
 
 class EnergyOptimizerTests(unittest.TestCase):
     def setUp(self):
+        # Each test gets a fresh optimizer instance.
         self.optimizer = EnergyOptimizer()
 
     def test_solar_serves_load_and_charges_battery(self):
+        # Solar first serves demand; remaining solar charges the battery with efficiency loss.
         usage, battery = self.optimizer.optimize(
             EnergyState(
                 solar=100,
@@ -26,6 +28,7 @@ class EnergyOptimizerTests(unittest.TestCase):
         self.assertAlmostEqual(battery, 64)
 
     def test_peak_hour_prefers_battery_before_grid(self):
+        # During expensive peak hours, battery discharges down to reserve before grid use.
         usage, battery = self.optimizer.optimize(
             EnergyState(
                 solar=0,
@@ -43,6 +46,7 @@ class EnergyOptimizerTests(unittest.TestCase):
         self.assertAlmostEqual(battery, 20)
 
     def test_island_mode_reports_unmet_demand(self):
+        # With grid unavailable and battery at reserve, unmet demand is reported.
         usage, battery = self.optimizer.optimize(
             EnergyState(
                 solar=10,

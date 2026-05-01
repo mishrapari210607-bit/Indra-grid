@@ -2,9 +2,11 @@ from sqlalchemy import Column, DateTime, Float, Integer, String, Text
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 
+# Base class used by SQLAlchemy to create all database tables.
 Base = declarative_base()
 
 class User(Base):
+    # Registered dashboard users and their role.
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -14,6 +16,7 @@ class User(Base):
 
 
 class SimulationRun(Base):
+    # Saved simulation summaries shown later in the admin/history view.
     __tablename__ = "simulation_runs"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -33,6 +36,7 @@ class SimulationRun(Base):
 
 
 class FaultEvent(Base):
+    # Operational event log used for active/resolved plant issues.
     __tablename__ = "fault_events"
 
     id = Column(Integer, primary_key=True, index=True)

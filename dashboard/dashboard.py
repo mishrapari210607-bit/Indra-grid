@@ -23,6 +23,7 @@ LOGO_PATH = Path(__file__).resolve().parent / "assets" / "indra_grid_logo.png"
 
 
 def brand_logo_data_uri():
+    # Convert local logo image into an inline data URI for Streamlit markdown.
     if not LOGO_PATH.exists():
         return ""
     encoded = base64.b64encode(LOGO_PATH.read_bytes()).decode("ascii")
@@ -30,6 +31,7 @@ def brand_logo_data_uri():
 
 
 def brand_logo_html(class_name="brand-logo", size=48):
+    # Return reusable logo HTML with caller-provided class and size.
     src = brand_logo_data_uri()
     if not src:
         return ""
@@ -37,6 +39,7 @@ def brand_logo_html(class_name="brand-logo", size=48):
 
 
 def run(username="Operator", role="Operator"):
+    # Main dashboard controller: build controls, run simulation, and route views.
     init_state()
     if st.session_state.get("view") not in {"Live Simulator", "Energy Flow", "Account"}:
         st.session_state.view = "Live Simulator"
@@ -71,6 +74,7 @@ def run(username="Operator", role="Operator"):
 
 
 def init_state():
+    # Default Streamlit session values used by sidebar controls and views.
     defaults = {
         "range_sel": "Day",
         "entity_type": "Industrial Plant",
@@ -89,6 +93,7 @@ def init_state():
 
 
 def entity_config(etype):
+    # Entity presets scale the same optimizer for plant, building, data centre, or campus.
     configs = {
         "Industrial Plant": {
             "scale": 120,
@@ -159,6 +164,7 @@ def entity_config(etype):
 
 
 def sidebar(username, role, cfg):
+    # Left sidebar collects entity, scenario, battery, grid, and weather controls.
     with st.sidebar:
         st.markdown(
             f'<div class="side-brand">{brand_logo_html("side-logo", 54)}<div class="side-brand-text">INDRA-GRID</div></div>',
@@ -192,11 +198,15 @@ def sidebar(username, role, cfg):
         st.toggle("Grid Available", key="grid_available")
 
         st.markdown('<div class="slabel">Weather API</div>', unsafe_allow_html=True)
+        # Fetch live solar/weather forecast for the configured location.
         weather_df = get_solar_forecast(st.session_state.weather_lat, st.session_state.weather_lon)
         if weather_df is not None and not weather_df.empty:
+            # Convert hourly weather rows into daily solar summary values.
             solar_days = summarize_solar_forecast(weather_df)
+            # Pick the current hour, or the next hour with useful sunlight.
             current = current_or_next_solar_hour(weather_df)
             today = solar_days.iloc[0]
+            # Sidebar metrics shown to the operator.
             st.metric("Next Solar Irradiance", f"{current['Radiation (W/m2)']:.0f} W/m2")
             st.metric("Today Peak", f"{today['Peak Radiation']:.0f} W/m2")
             st.metric("Cloud Cover", f"{today['Avg Cloud']:.0f}%")
@@ -230,6 +240,7 @@ def sidebar(username, role, cfg):
 
 
 def optimized_frame(cfg, controls, hours=None):
+    # Generate scenario data, apply demo mode, then optimize each hour.
     hours = hours or {"Day": 24, "Week": 24 * 7, "Month": 24 * 30, "Year": 24 * 30}[st.session_state.range_sel]
     sim = EnergySimulator(hours=hours, seed=int(controls["seed"]))
     raw = sim.generate()
@@ -278,6 +289,7 @@ def optimized_frame(cfg, controls, hours=None):
 
 
 def apply_demo_scenario(raw, scenario_mode):
+    # Scenario toggles reshape demand, tariff, grid, or solar to tell a demo story.
     raw = raw.copy()
     evening = raw["hour"].between(18, 22)
 
@@ -297,6 +309,7 @@ def apply_demo_scenario(raw, scenario_mode):
 
 
 def summarize(df, cfg):
+    # Aggregate hourly dispatch rows into KPI totals for dashboard cards.
     solar = df["solar_used"].sum()
     demand = df["demand"].sum()
     grid = df["grid_used"].sum()
@@ -338,6 +351,7 @@ def summarize(df, cfg):
 
 
 def report_frame(df, cfg):
+    # Add report-only cost/savings columns for CSV download.
     out = df.copy()
     out["grid_cost_rs"] = out["grid_used"] * cfg["tariff"]
     out["solar_savings_rs"] = out["solar_used"] * cfg["tariff"]
@@ -346,6 +360,7 @@ def report_frame(df, cfg):
 
 
 def recommendations(df, cfg, summary):
+    # Turn current simulation state into operator-facing recommendations.
     latest = df.iloc[-1]
     peak_grid = df[(df["hour"].between(18, 22)) & (df["grid_used"] > 0)]["grid_used"].sum()
     recs = []
@@ -369,6 +384,7 @@ def recommendations(df, cfg, summary):
 
 
 def operator_actions(df, cfg, summary):
+    # Concrete next actions based on outage, peak, battery, and solar export signals.
     actions = []
     peak_grid = df[(df["hour"].between(18, 22)) & (df["grid_used"] > 0)]["grid_used"].sum()
     flexible_load = summary["demand"] * 0.12
@@ -388,12 +404,14 @@ def operator_actions(df, cfg, summary):
 
 
 def auth_headers():
+    # Attach bearer token when saving or reading protected backend data.
     token = st.session_state.get("token")
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 @st.cache_data(ttl=3600)
 def get_solar_forecast(lat=26.4499, lon=80.3319):
+    # Open-Meteo provides hourly radiation, cloud, rain, and temperature forecast.
     url = "https://api.open-meteo.com/v1/forecast"
     params = {"latitude": lat, "longitude": lon, "forecast_days": 7, "timezone": "auto"}
     try:
@@ -403,6 +421,7 @@ def get_solar_forecast(lat=26.4499, lon=80.3319):
             timeout=6,
         ).json()
         hourly = response["hourly"]
+        # Normalize API arrays into a DataFrame used by the dashboard.
         return pd.DataFrame(
             {
                 "Time": pd.to_datetime(hourly["time"]),
@@ -418,6 +437,7 @@ def get_solar_forecast(lat=26.4499, lon=80.3319):
 
 
 def current_or_next_solar_hour(weather_df):
+    # Prefer the next daylight hour so "Next Solar Irradiance" is useful at night too.
     now = pd.Timestamp.now()
     upcoming = weather_df[weather_df["Time"] >= now]
     daylight = upcoming[upcoming["Radiation (W/m2)"] > 25]
@@ -430,15 +450,18 @@ def current_or_next_solar_hour(weather_df):
 
 def summarize_solar_forecast(weather_df):
     df = weather_df.copy()
+    # Group hourly forecast data into daily rows for peak/average solar metrics.
     df["Date"] = df["Time"].dt.date
     rows = []
     for day, group in df.groupby("Date", sort=True):
+        # Daylight rows avoid night hours pulling down average solar/cloud values.
         daylight = group[group["Radiation (W/m2)"] > 25]
         source = daylight if not daylight.empty else group
         peak_radiation = float(group["Radiation (W/m2)"].max())
         avg_daylight = float(source["Radiation (W/m2)"].mean())
         avg_cloud = float(source["Cloud Cover (%)"].mean())
         rain_risk = float(source["Rain Probability (%)"].max())
+        # Solar score is a compact planning signal: high radiation helps, clouds/rain reduce it.
         solar_score = max(0, min(100, (avg_daylight / 750 * 100) - (avg_cloud * 0.35) - (rain_risk * 0.15)))
         if solar_score >= 70:
             plan = "High solar: run flexible loads in daytime"
@@ -461,6 +484,7 @@ def summarize_solar_forecast(weather_df):
 
 
 def fetch_weather_forecast(lat, lon):
+    # Forecast view uses the backend weather API so dispatch can be recalculated from weather.
     try:
         res = requests.get(
             f"{API}/weather/forecast",
@@ -473,6 +497,7 @@ def fetch_weather_forecast(lat, lon):
 
 
 def weather_adjusted_frame(cfg, controls, weather):
+    # Start with the normal optimized simulation, then adjust it with weather factors.
     df = optimized_frame(cfg, controls, hours=24)
     hours = weather.get("hours", [])
     if not hours:
@@ -480,6 +505,7 @@ def weather_adjusted_frame(cfg, controls, weather):
 
     cloud = pd.Series([float(item.get("cloud_cover_pct", 50)) for item in hours[: len(df)]])
     rain = pd.Series([float(item.get("precipitation_probability_pct", 0)) for item in hours[: len(df)]])
+    # More cloud reduces solar output; more rain slightly increases demand.
     solar_factor = (1 - cloud.reindex(df.index, fill_value=50) / 100 * 0.55).clip(lower=0.35, upper=1.0)
     demand_factor = (1 + rain.reindex(df.index, fill_value=0) / 100 * 0.08).clip(lower=1.0, upper=1.12)
 
@@ -527,6 +553,7 @@ def weather_adjusted_frame(cfg, controls, weather):
 
 
 def inject_css():
+    # Central CSS styling for the Streamlit dashboard.
     dk = st.session_state.dark_mode
     bg = "#0F0D0A" if dk else "#F7F5F2"
     surface = "#1C1A16" if dk else "#FFFFFF"
@@ -730,6 +757,7 @@ def inject_css():
 
 
 def topbar(entity_type, view):
+    # Header strip with brand, current entity, and active page label.
     timestamp = datetime.now().strftime("%d %b %Y %H:%M IST")
     st.markdown(
         f"""
@@ -744,6 +772,7 @@ def topbar(entity_type, view):
 
 
 def alert(text):
+    # Show high-priority operational warning at the top of the page.
     st.markdown(
         f'<div class="alert-banner"><div class="alert-dot"></div><div class="alert-text">{text}</div></div>',
         unsafe_allow_html=True,
@@ -751,11 +780,13 @@ def alert(text):
 
 
 def range_selector():
+    # Time range selector controls how many simulated hours are shown.
     ranges = ["Day", "Week", "Month"]
     st.radio("Range", ranges, key="range_sel", horizontal=True, label_visibility="collapsed")
 
 
 def dashboard_view(df, cfg, summary, username, entity_type):
+    # Main live simulator page with KPIs, dispatch chart, forecast, and actions.
     st.markdown('<div class="page-pad"></div>', unsafe_allow_html=True)
     range_selector()
 
@@ -787,12 +818,14 @@ def dashboard_view(df, cfg, summary, username, entity_type):
 
 
 def kpi(label, value, unit, delta, cls=""):
+    # Reusable KPI card HTML.
     display = value / 1000 if unit == "kWh" and value >= 10000 else value
     unit_display = "MWh" if unit == "kWh" and value >= 10000 else unit
     return f'<div class="kpi-card"><div class="kpi-label">{label}</div><div class="kpi-val">{display:.1f}<span class="kpi-unit">{unit_display}</span></div><div class="kpi-delta {cls}">{delta}</div></div>'
 
 
 def dispatch_chart(df):
+    # Stacked dispatch chart comparing load served by solar, battery, and grid.
     plot_df = df.tail(48).copy()
     x = plot_df["step"].astype(str) if len(plot_df) > 30 else plot_df["time"]
     fig = go.Figure()
@@ -806,6 +839,7 @@ def dispatch_chart(df):
 
 
 def live_inspector(df, cfg):
+    # Current hour snapshot shown beside live dispatch.
     st.markdown('<div class="slabel">Hourly Inspector</div>', unsafe_allow_html=True)
     idx = st.slider("Inspect Hour", 0, len(df) - 1, min(len(df) - 1, 12))
     row = df.iloc[idx]
@@ -823,6 +857,7 @@ def live_inspector(df, cfg):
 
 
 def solar_forecast_panel():
+    # Seven-day solar planning table using Open-Meteo radiation forecast.
     weather_df = get_solar_forecast(st.session_state.weather_lat, st.session_state.weather_lon)
     if weather_df is None or weather_df.empty:
         return
@@ -846,6 +881,7 @@ def solar_forecast_panel():
 
 
 def recommendation_panel(df, cfg, summary):
+    # Display generated recommendations in a compact row list.
     rec_html = ""
     for label, text in recommendations(df, cfg, summary):
         tag = "tag-err" if label == "Critical" else ("tag-warn" if label in {"Warning", "Peak", "Tariff"} else "tag-on")
@@ -854,6 +890,7 @@ def recommendation_panel(df, cfg, summary):
 
 
 def action_plan_panel(df, cfg, summary):
+    # Display concrete operational actions for the current simulation.
     rows = ""
     for label, text in operator_actions(df, cfg, summary):
         tag = "tag-err" if label == "Immediate" else ("tag-warn" if label in {"Sizing", "Battery", "Tariff"} else "tag-on")
@@ -862,6 +899,7 @@ def action_plan_panel(df, cfg, summary):
 
 
 def battery_soc_chart(df, cfg):
+    # Battery state-of-charge trend with reserve reference line.
     fig = go.Figure()
     soc = df["battery_level"] / cfg["battery_capacity"] * 100
     fig.add_trace(go.Scatter(x=df["step"], y=soc, name="Battery SOC", mode="lines", fill="tozeroy", line=dict(color="#4A90D9", width=2.5)))
@@ -873,6 +911,7 @@ def battery_soc_chart(df, cfg):
 
 
 def report_actions(df, cfg, summary, username, entity_type):
+    # Save run to backend and provide CSV/text report exports.
     st.markdown('<div class="slabel">Reports & Persistence</div>', unsafe_allow_html=True)
     report = report_frame(df, cfg)
     st.download_button(
@@ -919,6 +958,7 @@ def report_actions(df, cfg, summary, username, entity_type):
 
 
 def build_text_report(summary, cfg, entity_type):
+    # Plain-text executive summary for download.
     carbon_credit_rate = 1200
     credits = summary["co2"] / 1000 * carbon_credit_rate
     return (
@@ -944,6 +984,7 @@ def build_text_report(summary, cfg, entity_type):
 
 
 def chart_layout(height):
+    # Shared Plotly layout for dark dashboard charts.
     dk = st.session_state.dark_mode
     text = "#F0EAE0" if dk else "#1A1008"
     muted = "#BBA98F" if dk else "#5E4B38"
@@ -963,6 +1004,7 @@ def chart_layout(height):
 
 
 def equipment_panel(df, cfg):
+    # Equipment status cards derived from battery, transformer, and grid state.
     latest = df.iloc[-1]
     status = [
         (cfg["solar_label"], f"{latest['solar']:.0f} kWh", "on", "Online"),
@@ -978,6 +1020,7 @@ def equipment_panel(df, cfg):
 
 
 def performance_panel(summary, cfg):
+    # Finance/reliability indicators used in the energy-flow page.
     grid_dep = max(0, 100 - summary["self_suff"])
     items = [
         ("Plant PR", cfg["pr"]),
@@ -993,8 +1036,18 @@ def performance_panel(summary, cfg):
     st.markdown(f'<div class="slabel">Performance Indices</div><div class="panel">{rows}</div>', unsafe_allow_html=True)
 
 
+def current_hour_row(df):
+    # Select the row matching the current local hour when available.
+    current_hour = datetime.now().hour
+    matches = df[df["hour"] == current_hour]
+    if not matches.empty:
+        return matches.iloc[0]
+    return df.iloc[-1]
+
+
 def energy_flow_view(df, cfg, summary):
-    latest = df.iloc[-1]
+    # Flow view focuses on current-hour source-to-load movement.
+    latest = current_hour_row(df)
     st.markdown('<div class="page-pad"></div>', unsafe_allow_html=True)
     st.markdown('<div class="slabel">Current Hour Energy Flow</div>', unsafe_allow_html=True)
     current_rows = [
@@ -1065,19 +1118,23 @@ def energy_flow_view(df, cfg, summary):
         ])
 
 def flow_node(code, label, value):
+    # Small label block for the Sankey-style visual.
     return f'<div class="flow-node"><div class="flow-node-icon">{code}</div><div class="flow-node-label">{label}</div><div class="flow-node-val">{value:.1f} kWh</div></div>'
 
 
 def flow_card(label, value, max_value, meta):
+    # Bar-style energy source/load card scaled by the largest current value.
     width = min(100, value / max(max_value, 1) * 100)
     return f'<div class="flow-card"><div class="flow-label">{label}</div><div class="flow-val">{value:.1f} kWh</div><div class="flow-bar-track"><div class="flow-bar-fill" style="width:{width:.0f}%"></div></div><div class="drow-val" style="text-align:left;margin-top:6px;">{meta}</div></div>'
 
 
 def active_faults(df, cfg, summary):
+    # Filter generated fault data down to active events.
     return [f for f in fault_data(df, cfg, summary) if f[3] == "active"]
 
 
 def fault_data(df, cfg, summary):
+    # Build demo fault list from simulation signals such as unmet load or low SOC.
     now = datetime.now().strftime("%d %b %Y %H:%M IST")
     faults = []
 
@@ -1142,6 +1199,7 @@ def fault_data(df, cfg, summary):
 
 
 def fault_log_view(df, cfg, summary):
+    # Fault table for active and resolved events.
     faults = fault_data(df, cfg, summary)
     st.markdown('<div class="page-pad"></div>', unsafe_allow_html=True)
     total = len(faults)
@@ -1175,6 +1233,7 @@ def fault_log_view(df, cfg, summary):
 
 
 def analytics_view(df, cfg):
+    # Monthly analytics charts based on scaled simulation totals.
     st.markdown('<div class="page-pad"></div>', unsafe_allow_html=True)
     monthly = make_monthly(df, cfg)
     fig = go.Figure()
@@ -1204,6 +1263,7 @@ def analytics_view(df, cfg):
 
 
 def make_monthly(df, cfg):
+    # Derive annualized monthly values from the selected simulation window.
     base_solar = df["solar_used"].sum() / 1000
     base_grid = df["grid_used"].sum() / 1000
     base_load = df["demand"].sum() / 1000
@@ -1224,6 +1284,7 @@ def make_monthly(df, cfg):
 
 
 def forecast_view(cfg, controls):
+    # Weather-aware forecast page recalculates dispatch with cloud/rain impact.
     st.markdown('<div class="page-pad"></div>', unsafe_allow_html=True)
     st.markdown('<div class="slabel">Weather-Aware Forecast</div>', unsafe_allow_html=True)
 
@@ -1254,6 +1315,7 @@ def forecast_view(cfg, controls):
 
 
 def weather_panel(weather):
+    # Summarize backend weather API status and averaged weather values.
     hours = weather.get("hours", [])
     if not hours:
         rows_panel("Weather API", [("Status", weather.get("status", "offline")), ("Source", weather.get("source", "unknown"))])
@@ -1272,6 +1334,7 @@ def weather_panel(weather):
 
 
 def admin_view(role):
+    # Admin-only page for users, saved runs, and backend records.
     st.markdown('<div class="page-pad"></div>', unsafe_allow_html=True)
     st.markdown('<div class="slabel">Admin Console</div>', unsafe_allow_html=True)
     if role != "Admin":
@@ -1311,6 +1374,7 @@ def admin_view(role):
 
 
 def account_view(username, role, cfg, entity_type):
+    # Account page combines profile, admin tools, analytics, forecast, and faults.
     st.markdown('<div class="page-pad"></div>', unsafe_allow_html=True)
     st.markdown(
         f"""
@@ -1346,6 +1410,7 @@ def account_view(username, role, cfg, entity_type):
         ])
 
 def rows_panel(title, rows):
+    # Generic label/value panel used across account, weather, and admin views.
     rows_html = ""
     for label, value in rows:
         rows_html += f'<div class="drow"><span class="drow-label">{label}</span><span class="drow-val">{value}</span></div>'
@@ -1356,10 +1421,12 @@ def rows_panel(title, rows):
 
 
 def pct(numerator, denominator):
+    # Safe percentage helper that avoids division by zero.
     return f"{0 if denominator == 0 else numerator / denominator * 100:.1f}%"
 
 
 def bottom_bar(view):
+    # Small footer showing the currently selected mode.
     items = [("Live Simulator", "Live"), ("Energy Flow", "Flow"), ("Account", "Account")]
     html = "".join(f'<div class="bb-item {"bb-active" if name == view else ""}">{label}</div>' for name, label in items)
     st.markdown(f'<div class="bottom-bar">{html}</div>', unsafe_allow_html=True)

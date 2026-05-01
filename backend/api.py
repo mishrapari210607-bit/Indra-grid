@@ -11,18 +11,21 @@ from logic.optimizer import EnergyOptimizer, EnergyState
 
 
 app = FastAPI()
+# Create any missing tables at application startup.
 Base.metadata.create_all(bind=engine)
 
 VALID_ROLES = {"Owner", "Operator", "Admin"}
 
 
 class UserPayload(BaseModel):
+    # Request body for register/login.
     username: str
     password: str
     role: str = "Operator"
 
 
 class RunPayload(BaseModel):
+    # Saved dashboard run summary sent from the frontend.
     username: str
     entity_type: str
     range_sel: str
@@ -38,6 +41,7 @@ class RunPayload(BaseModel):
 
 
 class OptimizerPayload(BaseModel):
+    # One dispatch state sent to the optimizer endpoint.
     solar: float
     demand: float
     battery_level: float
@@ -48,6 +52,7 @@ class OptimizerPayload(BaseModel):
 
 
 class FaultPayload(BaseModel):
+    # Fault/event details created from the admin view.
     title: str
     location: str
     status: str = "active"
@@ -55,21 +60,25 @@ class FaultPayload(BaseModel):
 
 
 def clean_username(username: str) -> str:
+    # Usernames are normalized for consistent lookup.
     return username.strip().lower()
 
 
 def clean_role(role: str) -> str:
+    # Unknown roles fall back to Operator.
     role = role.strip()
     return role if role in VALID_ROLES else "Operator"
 
 
 def bearer_token(authorization: str | None) -> str:
+    # Extract raw token from Authorization: Bearer <token>.
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token")
     return authorization.split(" ", 1)[1].strip()
 
 
 def current_user(authorization: str | None = Header(default=None)):
+    # Validate JWT and load the matching user from SQLite.
     username = verify_token(bearer_token(authorization))
     if not username:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -85,6 +94,7 @@ def current_user(authorization: str | None = Header(default=None)):
 
 
 def require_admin(authorization: str | None = Header(default=None)):
+    # Admin-only endpoints share this role guard.
     user = current_user(authorization)
     if user["role"] != "Admin":
         raise HTTPException(status_code=403, detail="Admin role required")
@@ -92,6 +102,7 @@ def require_admin(authorization: str | None = Header(default=None)):
 
 
 def migrate_sqlite_schema():
+    # Lightweight migrations keep old local DB files compatible with newer models.
     with engine.begin() as conn:
         try:
             cols = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(users)").fetchall()]
@@ -112,6 +123,7 @@ migrate_sqlite_schema()
 
 
 def seed_default_faults():
+    # Add sample faults only once so the demo starts with useful admin data.
     db = SessionLocal()
     try:
         if db.query(FaultEvent).count() == 0:
@@ -133,6 +145,7 @@ seed_default_faults()
 
 @app.get("/health")
 def health():
+    # Simple readiness check for frontend/integration scripts.
     return {
         "status": "ok",
         "service": "Indra-Grid API",
@@ -142,6 +155,7 @@ def health():
 
 @app.post("/register")
 def register(user: UserPayload):
+    # Register a new user after normalizing role and credentials.
     username = clean_username(user.username)
     password = user.password.strip()
     role = clean_role(user.role or "Operator")
@@ -164,6 +178,7 @@ def register(user: UserPayload):
 
 @app.post("/login")
 def login(user: UserPayload):
+    # Authenticate user and return a JWT token used by protected APIs.
     username = clean_username(user.username)
     password = user.password.strip()
     requested_role = clean_role(user.role or "Operator")
@@ -191,6 +206,7 @@ def login(user: UserPayload):
 
 @app.get("/users")
 def users(authorization: str | None = Header(default=None)):
+    # Admin view lists registered users.
     require_admin(authorization)
     db = SessionLocal()
     try:
@@ -204,6 +220,7 @@ def users(authorization: str | None = Header(default=None)):
 
 @app.post("/runs")
 def save_run(run: RunPayload, authorization: str | None = Header(default=None)):
+    # Save one dashboard simulation snapshot for later history review.
     current_user(authorization)
     db = SessionLocal()
     try:
@@ -219,6 +236,7 @@ def save_run(run: RunPayload, authorization: str | None = Header(default=None)):
 
 @app.get("/runs")
 def runs(limit: int = 20, authorization: str | None = Header(default=None)):
+    # Admin view reads latest saved simulation snapshots.
     require_admin(authorization)
     db = SessionLocal()
     try:
@@ -248,6 +266,7 @@ def runs(limit: int = 20, authorization: str | None = Header(default=None)):
 
 @app.get("/faults")
 def faults(authorization: str | None = Header(default=None)):
+    # Admin view reads all active/resolved fault events.
     require_admin(authorization)
     db = SessionLocal()
     try:
@@ -269,6 +288,7 @@ def faults(authorization: str | None = Header(default=None)):
 
 @app.post("/faults")
 def create_fault(fault: FaultPayload, authorization: str | None = Header(default=None)):
+    # Admin view creates a new operational fault/event.
     require_admin(authorization)
     status = fault.status.strip().lower()
     priority = fault.priority.strip().upper()
@@ -295,23 +315,28 @@ def create_fault(fault: FaultPayload, authorization: str | None = Header(default
 
 @app.get("/weather/forecast")
 def weather_forecast(latitude: float = 26.4499, longitude: float = 80.3319):
+    # Backend weather endpoint used by the dashboard forecast view.
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": latitude,
         "longitude": longitude,
+        # Hourly values needed to estimate solar availability and weather impact.
         "hourly": "temperature_2m,cloud_cover,precipitation_probability",
         "forecast_days": 1,
         "timezone": "Asia/Kolkata",
     }
     try:
+        # Try live Open-Meteo data first.
         response = requests.get(url, params=params, timeout=6)
         response.raise_for_status()
         data = response.json()
         hourly = data.get("hourly", {})
+        # Keep only the first 24 hours for the one-day dispatch forecast.
         times = hourly.get("time", [])[:24]
         temps = hourly.get("temperature_2m", [])[:24]
         clouds = hourly.get("cloud_cover", [])[:24]
         rain = hourly.get("precipitation_probability", [])[:24]
+        # Convert parallel API arrays into consistent hourly objects for the frontend.
         rows = [
             {
                 "time": times[i],
@@ -329,6 +354,7 @@ def weather_forecast(latitude: float = 26.4499, longitude: float = 80.3319):
             "hours": rows,
         }
     except Exception:
+        # If the external API fails, return a deterministic Kanpur-like forecast.
         rows = [
             {
                 "time": f"{hour:02d}:00",
@@ -349,6 +375,7 @@ def weather_forecast(latitude: float = 26.4499, longitude: float = 80.3319):
 
 @app.post("/optimize")
 def optimize(payload: OptimizerPayload):
+    # API wrapper around the shared EnergyOptimizer logic.
     usage, battery = EnergyOptimizer().optimize(EnergyState(**payload.dict()))
     return {
         "solar_used": usage.solar_used,

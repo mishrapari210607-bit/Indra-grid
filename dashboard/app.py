@@ -5,10 +5,12 @@ import sys
 import streamlit as st
 import time
 
+# Add repo root to Python path so dashboard can import backend/data/logic modules.
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Load dashboard.py as an explicit module to avoid import-name conflicts.
 DASHBOARD_MODULE_PATH = Path(__file__).resolve().with_name("dashboard.py")
 spec = importlib.util.spec_from_file_location("indra_grid_dashboard", DASHBOARD_MODULE_PATH)
 dashboard = importlib.util.module_from_spec(spec)
@@ -18,6 +20,7 @@ spec.loader.exec_module(dashboard)
 
 API = "http://127.0.0.1:8001"
 
+# Main Streamlit page settings for the authenticated app.
 st.set_page_config(
     page_title="Indra-Grid",
     layout="wide",
@@ -25,6 +28,7 @@ st.set_page_config(
 )
 
 
+# Session state keeps login/user data across Streamlit reruns.
 if "token" not in st.session_state:
     st.session_state.token = None
 if "user" not in st.session_state:
@@ -36,6 +40,7 @@ if "post_login_loading" not in st.session_state:
 
 
 def loading_screen():
+    # Short branded transition shown immediately after login.
     logo_html = dashboard.brand_logo_html("loading-logo", 72)
     st.markdown(
         """
@@ -107,6 +112,7 @@ def loading_screen():
 
 
 def login():
+    # Login/register screen calls the FastAPI backend and stores the JWT token.
     logo_html = dashboard.brand_logo_html("login-logo", 86)
     st.markdown(
         """
@@ -163,6 +169,7 @@ def login():
     if col1.button("Login", use_container_width=True):
         try:
             with st.spinner("Verifying credentials..."):
+                # Authenticate against backend /login and receive a JWT token.
                 res = requests.post(
                     f"{API}/login",
                     json={"username": username, "password": password, "role": role},
@@ -182,6 +189,7 @@ def login():
     if col2.button("Register", use_container_width=True):
         try:
             with st.spinner("Creating secure user profile..."):
+                # Create a user in the backend, then user can log in.
                 res = requests.post(
                     f"{API}/register",
                     json={"username": username, "password": password, "role": role},
@@ -196,9 +204,11 @@ def login():
 
 
 def app():
+    # Hand off to the full dashboard once authentication is complete.
     dashboard.run(st.session_state.user, st.session_state.role)
 
 
+# Router: unauthenticated users see login; authenticated users see dashboard.
 if not st.session_state.token:
     login()
 elif st.session_state.post_login_loading:
